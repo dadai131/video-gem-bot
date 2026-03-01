@@ -2,3 +2,6 @@ project_id = "djabqkjniwfxbbvtsjeo"
 
 [functions.analyze-video]
 verify_jwt = false
+
+[functions.download-youtube]
+verify_jwt = false
