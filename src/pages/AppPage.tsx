@@ -8,6 +8,7 @@ import Navbar from "@/components/Navbar";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
+import { cutVideoClip, cutAllClips, downloadBlob } from "@/lib/videoCutter";
 import {
   ArrowRight,
   Play,
@@ -18,6 +19,8 @@ import {
   SkipBack,
   Upload,
   FileVideo,
+  Download,
+  Loader2,
 } from "lucide-react";
 
 function formatTime(s: number) {
@@ -42,6 +45,12 @@ const AppPage = () => {
   const [localVideoUrl, setLocalVideoUrl] = useState<string | null>(null);
   const [mode, setMode] = useState<"youtube" | "upload">(initialUrl ? "youtube" : "youtube");
   const [isDragging, setIsDragging] = useState(false);
+
+  // Cutting state
+  const [cuttingClip, setCuttingClip] = useState<number | null>(null);
+  const [cuttingAll, setCuttingAll] = useState(false);
+  const [cutProgress, setCutProgress] = useState(0);
+  const [cutStatus, setCutStatus] = useState("");
 
   const playerRef = useRef<HTMLIFrameElement>(null);
   const nativePlayerRef = useRef<HTMLVideoElement>(null);
@@ -82,7 +91,6 @@ const AppPage = () => {
       clearInterval(progressInterval);
 
       if (error) {
-        // Try to get the actual error message from the response body
         if (data?.error) throw new Error(data.error);
         throw new Error(error.message || "Erro ao analisar vídeo");
       }
@@ -154,6 +162,80 @@ const AppPage = () => {
     }
   };
 
+  const handleCutClip = async (index: number) => {
+    if (!uploadedFile || cuttingClip !== null || cuttingAll) return;
+    const clip = clips[index];
+    if (!clip) return;
+
+    setCuttingClip(index);
+    setCutProgress(0);
+    setCutStatus("Iniciando...");
+
+    try {
+      const blob = await cutVideoClip(
+        uploadedFile,
+        clip.start_seconds,
+        clip.end_seconds,
+        index,
+        (pct, status) => {
+          setCutProgress(pct);
+          setCutStatus(status);
+        }
+      );
+
+      const safeName = clip.title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
+      downloadBlob(blob, `${safeName}_clip${index + 1}.mp4`);
+
+      toast({ title: "Clip exportado!", description: `"${clip.title}" salvo com sucesso.` });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        title: "Erro ao cortar",
+        description: e.message || "Não foi possível cortar o vídeo.",
+        variant: "destructive",
+      });
+    } finally {
+      setCuttingClip(null);
+    }
+  };
+
+  const handleCutAll = async () => {
+    if (!uploadedFile || cuttingClip !== null || cuttingAll) return;
+
+    setCuttingAll(true);
+    setCutProgress(0);
+
+    try {
+      const results = await cutAllClips(
+        uploadedFile,
+        clips,
+        (clipIdx, pct, status) => {
+          const overallPct = Math.round(((clipIdx + pct / 100) / clips.length) * 100);
+          setCutProgress(overallPct);
+          setCutStatus(`Cortando clip ${clipIdx + 1}/${clips.length}...`);
+        }
+      );
+
+      for (const { blob, title } of results) {
+        const safeName = title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
+        downloadBlob(blob, `${safeName}.mp4`);
+        // Small delay between downloads
+        await new Promise((r) => setTimeout(r, 300));
+      }
+
+      toast({ title: "Todos os clips exportados!", description: `${results.length} clips salvos.` });
+    } catch (e: any) {
+      console.error(e);
+      toast({
+        title: "Erro ao cortar",
+        description: e.message || "Não foi possível cortar os vídeos.",
+        variant: "destructive",
+      });
+    } finally {
+      setCuttingAll(false);
+    }
+  };
+
   const playClip = (index: number) => {
     setActiveClip(index);
     const clip = clips[index];
@@ -193,6 +275,8 @@ const AppPage = () => {
     const file = e.dataTransfer.files[0];
     if (file) handleFileSelect(file);
   }, []);
+
+  const isCutting = cuttingClip !== null || cuttingAll;
 
   return (
     <div className="min-h-screen bg-background">
@@ -312,6 +396,20 @@ const AppPage = () => {
           </div>
         )}
 
+        {/* Cutting progress overlay */}
+        {isCutting && phase === "results" && (
+          <div className="glass rounded-2xl p-6 mb-6 animate-fade-in">
+            <div className="flex items-center gap-4">
+              <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold">{cutStatus}</p>
+                <Progress value={cutProgress} className="h-1.5 mt-2" />
+              </div>
+              <span className="text-xs text-muted-foreground">{cutProgress}%</span>
+            </div>
+          </div>
+        )}
+
         {/* Results */}
         {phase === "results" && clips.length > 0 && (
           <div className="animate-slide-up">
@@ -319,10 +417,28 @@ const AppPage = () => {
               <h2 className="font-display text-2xl font-bold">
                 Melhores <span className="text-gradient">momentos</span>
               </h2>
-              <Button variant="outline" size="sm" className="gap-2" onClick={resetAll}>
-                <RefreshCw className="w-4 h-4" />
-                Novo vídeo
-              </Button>
+              <div className="flex items-center gap-2">
+                {mode === "upload" && uploadedFile && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="gap-2 glow-primary"
+                    onClick={handleCutAll}
+                    disabled={isCutting}
+                  >
+                    {cuttingAll ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    Exportar todos
+                  </Button>
+                )}
+                <Button variant="outline" size="sm" className="gap-2" onClick={resetAll}>
+                  <RefreshCw className="w-4 h-4" />
+                  Novo vídeo
+                </Button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -378,14 +494,13 @@ const AppPage = () => {
                   {clips.length} trechos identificados {mode === "youtube" ? "pela IA" : "pela análise local"}
                 </p>
                 {clips.map((clip, i) => (
-                  <button
+                  <div
                     key={i}
-                    onClick={() => playClip(i)}
                     className={`w-full text-left glass rounded-xl p-4 transition-all hover:border-primary/30 ${
                       activeClip === i ? "border-primary/50 glow-border" : ""
                     }`}
                   >
-                    <div className="flex items-start gap-3">
+                    <div className="flex items-start gap-3 cursor-pointer" onClick={() => playClip(i)}>
                       <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
                         <Play className="w-3.5 h-3.5 text-primary" />
                       </div>
@@ -405,7 +520,29 @@ const AppPage = () => {
                         <span className="text-xs font-semibold text-primary">{clip.score}</span>
                       </div>
                     </div>
-                  </button>
+                    {/* Download button for upload mode */}
+                    {mode === "upload" && uploadedFile && (
+                      <div className="mt-3 pt-3 border-t border-border/30">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full gap-2 text-xs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCutClip(i);
+                          }}
+                          disabled={isCutting}
+                        >
+                          {cuttingClip === i ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Download className="w-3.5 h-3.5" />
+                          )}
+                          {cuttingClip === i ? "Cortando..." : "Exportar clip"}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 ))}
               </div>
             </div>
