@@ -25,13 +25,20 @@ export async function getSharedFFmpeg(onProgress?: ProgressCallback): Promise<FF
     onProgress?.(2, "Baixando motor de vídeo (~30MB, só na 1ª vez)...");
 
     try {
+      // Use direct URLs for UMD build (no blob conversion needed)
       const coreURL = await toBlobURL(`${BASE_URL}/ffmpeg-core.js`, "text/javascript");
-      onProgress?.(3, "Baixando motor de vídeo (WASM)...");
-      
+      onProgress?.(5, "Baixando motor de vídeo (WASM)...");
+
       const wasmURL = await toBlobURL(`${BASE_URL}/ffmpeg-core.wasm`, "application/wasm");
       onProgress?.(8, "Inicializando motor de vídeo...");
 
-      await ffmpeg.load({ coreURL, wasmURL });
+      // Load with timeout to prevent infinite hang
+      const loadPromise = ffmpeg.load({ coreURL, wasmURL });
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("FFmpeg load timeout (60s). Recarregue a página e tente novamente.")), 60000)
+      );
+
+      await Promise.race([loadPromise, timeoutPromise]);
 
       ffmpegInstance = ffmpeg;
       ffmpegLoaded = true;
@@ -40,6 +47,8 @@ export async function getSharedFFmpeg(onProgress?: ProgressCallback): Promise<FF
       return ffmpeg;
     } catch (e) {
       loadingPromise = null;
+      ffmpegInstance = null;
+      ffmpegLoaded = false;
       throw e;
     }
   })();
