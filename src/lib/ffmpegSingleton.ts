@@ -7,7 +7,7 @@ let loadingPromise: Promise<FFmpeg> | null = null;
 
 export type ProgressCallback = (percent: number, status: string) => void;
 
-const BASE_URL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+const BASE_URL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
 
 export async function getSharedFFmpeg(onProgress?: ProgressCallback): Promise<FFmpeg> {
   if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
