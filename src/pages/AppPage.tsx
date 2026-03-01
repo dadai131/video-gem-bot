@@ -84,15 +84,19 @@ const AppPage = () => {
       setProgress(20);
       setStatusText("Analisando transcrição com IA...");
 
-      const { data, error } = await supabase.functions.invoke("analyze-video", {
+      const response = await supabase.functions.invoke("analyze-video", {
         body: { url: targetUrl },
       });
 
       clearInterval(progressInterval);
 
+      // supabase-js puts non-2xx body in data even when error is set
+      const data = response.data;
+      const error = response.error;
+
       if (error) {
-        if (data?.error) throw new Error(data.error);
-        throw new Error(error.message || "Erro ao analisar vídeo");
+        const msg = data?.error || error.message || "Erro ao analisar vídeo";
+        throw new Error(msg);
       }
       if (data?.error) throw new Error(data.error);
 
