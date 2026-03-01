@@ -48,6 +48,7 @@ const AppPage = () => {
   const [clips, setClips] = useState<Clip[]>([]);
   const [activeClip, setActiveClip] = useState<number>(0);
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [youtubeTranscript, setYoutubeTranscript] = useState<string | null>(null);
 
   // Upload state
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -150,6 +151,29 @@ const AppPage = () => {
       setVideoId(data.videoId);
       setClips(data.clips || []);
       setActiveClip(0);
+
+      // Parse YouTube transcript into subtitle segments
+      if (data.transcript) {
+        setYoutubeTranscript(data.transcript);
+        const lines = data.transcript.split("\n");
+        const segs: SubtitleSegment[] = [];
+        for (let i = 0; i < lines.length; i++) {
+          const match = lines[i].match(/^\[(\d+):(\d+)\]\s*(.+)$/);
+          if (match) {
+            const startSec = parseInt(match[1]) * 60 + parseInt(match[2]);
+            // End = next line's start, or start + 3s
+            let endSec = startSec + 3;
+            if (i + 1 < lines.length) {
+              const nextMatch = lines[i + 1].match(/^\[(\d+):(\d+)\]/);
+              if (nextMatch) {
+                endSec = parseInt(nextMatch[1]) * 60 + parseInt(nextMatch[2]);
+              }
+            }
+            segs.push({ id: segs.length + 1, start: startSec, end: endSec, text: match[3].trim() });
+          }
+        }
+        if (segs.length > 0) setSubtitles(segs);
+      }
 
       await new Promise((r) => setTimeout(r, 500));
       setProgress(100);
@@ -408,6 +432,7 @@ const AppPage = () => {
     setVideoId(null);
     setUploadedFile(null);
     setSubtitles([]);
+    setYoutubeTranscript(null);
     setTrimStart(0);
     setTrimEnd(0);
     setVideoDuration(0);
@@ -437,6 +462,7 @@ const AppPage = () => {
 
   const isCutting = cuttingClip !== null || cuttingAll;
   const hasVideo = !!uploadedFile && !!localVideoUrl;
+  const hasYoutubeResults = mode === "youtube" && phase === "results" && !!videoId;
 
   // ====== RENDER ======
 
@@ -633,7 +659,7 @@ const AppPage = () => {
                 Editar
               </TabsTrigger>
             )}
-            {hasVideo && (
+            {(hasVideo || hasYoutubeResults) && (
               <TabsTrigger value="subtitles" className="gap-2">
                 <Type className="w-3.5 h-3.5" />
                 Legendar
@@ -854,44 +880,75 @@ const AppPage = () => {
               {/* Video preview */}
               <div className="space-y-4">
                 <div className="glass rounded-xl overflow-hidden">
-                  <div className="aspect-video">
-                    <video
-                      ref={nativePlayerRef}
-                      src={localVideoUrl || ""}
-                      controls
-                      className="w-full h-full bg-background"
-                    />
+                  <div className="aspect-video relative">
+                    {hasVideo ? (
+                      <video
+                        ref={nativePlayerRef}
+                        src={localVideoUrl || ""}
+                        controls
+                        className="w-full h-full bg-background"
+                      />
+                    ) : hasYoutubeResults && videoId ? (
+                      <iframe
+                        ref={playerRef}
+                        src={`https://www.youtube.com/embed/${videoId}?rel=0`}
+                        className="w-full h-full"
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    ) : null}
                   </div>
                 </div>
 
-                {/* Transcribe button */}
-                <div className="glass rounded-xl p-4">
-                  <Button
-                    onClick={handleTranscribe}
-                    disabled={transcribing}
-                    className="w-full gap-2 glow-primary"
-                  >
-                    {transcribing ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Mic className="w-4 h-4" />
+                {/* Transcribe button - only for local files */}
+                {hasVideo && (
+                  <div className="glass rounded-xl p-4">
+                    <Button
+                      onClick={handleTranscribe}
+                      disabled={transcribing}
+                      className="w-full gap-2 glow-primary"
+                    >
+                      {transcribing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Mic className="w-4 h-4" />
+                      )}
+                      {transcribing ? "Transcrevendo..." : "Gerar legendas automaticamente"}
+                    </Button>
+
+                    {transcribing && (
+                      <div className="mt-3">
+                        <p className="text-xs text-muted-foreground mb-1">{transcribeStatus}</p>
+                        <Progress value={transcribeProgress} className="h-1.5" />
+                        <p className="text-xs text-muted-foreground mt-1">{transcribeProgress}%</p>
+                      </div>
                     )}
-                    {transcribing ? "Transcrevendo..." : "Gerar legendas automaticamente"}
-                  </Button>
 
-                  {transcribing && (
-                    <div className="mt-3">
-                      <p className="text-xs text-muted-foreground mb-1">{transcribeStatus}</p>
-                      <Progress value={transcribeProgress} className="h-1.5" />
-                      <p className="text-xs text-muted-foreground mt-1">{transcribeProgress}%</p>
-                    </div>
-                  )}
+                    <p className="text-xs text-muted-foreground mt-3">
+                      Usa Whisper (IA) 100% no navegador. ~75MB na primeira vez (fica em cache).
+                      Pode demorar alguns minutos dependendo do vídeo.
+                    </p>
+                  </div>
+                )}
 
-                  <p className="text-xs text-muted-foreground mt-3">
-                    Usa Whisper (IA) 100% no navegador. ~75MB na primeira vez (fica em cache).
-                    Pode demorar alguns minutos dependendo do vídeo.
-                  </p>
-                </div>
+                {/* YouTube info */}
+                {!hasVideo && hasYoutubeResults && subtitles.length > 0 && (
+                  <div className="glass rounded-xl p-4">
+                    <p className="text-sm text-muted-foreground">
+                      ✅ Legendas extraídas automaticamente do YouTube ({subtitles.length} segmentos).
+                      Edite o texto ao lado e faça download do arquivo .srt.
+                    </p>
+                  </div>
+                )}
+
+                {!hasVideo && hasYoutubeResults && subtitles.length === 0 && (
+                  <div className="glass rounded-xl p-4">
+                    <p className="text-sm text-muted-foreground">
+                      ⚠️ Esse vídeo não possui legendas disponíveis no YouTube.
+                      Para gerar legendas automáticas com Whisper, faça upload do arquivo de vídeo.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Subtitle editor */}
@@ -904,7 +961,7 @@ const AppPage = () => {
                   segments={subtitles}
                   onSegmentsChange={setSubtitles}
                   onSeekTo={seekTo}
-                  filename={uploadedFile?.name.replace(/\.[^.]+$/, "")}
+                  filename={uploadedFile?.name.replace(/\.[^.]+$/, "") || "youtube_subtitles"}
                 />
               </div>
             </div>

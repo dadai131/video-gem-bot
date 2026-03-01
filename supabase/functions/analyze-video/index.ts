@@ -204,7 +204,7 @@ Responda APENAS com JSON válido, sem markdown.`,
     // Sort by score descending
     clips.sort((a: any, b: any) => b.score - a.score);
 
-    return new Response(JSON.stringify({ videoId, clips }), {
+    return new Response(JSON.stringify({ videoId, clips, transcript }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
