@@ -571,6 +571,37 @@ const AppPage = () => {
                     Analisar Vídeo
                   </Button>
                 </div>
+
+                <div className="flex items-center gap-3 my-4">
+                  <div className="flex-1 h-px bg-border/60" />
+                  <span className="text-xs text-muted-foreground">ou</span>
+                  <div className="flex-1 h-px bg-border/60" />
+                </div>
+
+                <div
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    const file = e.dataTransfer.files[0];
+                    if (file) {
+                      handleFileSelect(file);
+                      setMode("upload");
+                    }
+                  }}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+                    isDragging
+                      ? "border-primary bg-primary/5"
+                      : "border-border/60 hover:border-primary/30 hover:bg-secondary/30"
+                  }`}
+                >
+                  <div className="flex items-center justify-center gap-3">
+                    <Upload className="w-5 h-5 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Arraste um vídeo aqui ou clique para fazer upload</p>
+                  </div>
+                </div>
               </TabsContent>
 
               <TabsContent value="upload">
