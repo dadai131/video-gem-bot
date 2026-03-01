@@ -5,10 +5,15 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import Navbar from "@/components/Navbar";
+import VideoTimeline from "@/components/VideoTimeline";
+import SubtitleEditor from "@/components/SubtitleEditor";
+import ExportDialog from "@/components/ExportDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
 import { cutVideoClip, cutAllClips, downloadBlob } from "@/lib/videoCutter";
+import { trimVideo, extractAudioWav } from "@/lib/videoEditor";
+import type { SubtitleSegment } from "@/lib/subtitleUtils";
 import {
   ArrowRight,
   Play,
@@ -21,6 +26,10 @@ import {
   FileVideo,
   Download,
   Loader2,
+  Film,
+  Type,
+  Search,
+  Mic,
 } from "lucide-react";
 
 function formatTime(s: number) {
@@ -52,6 +61,22 @@ const AppPage = () => {
   const [cutProgress, setCutProgress] = useState(0);
   const [cutStatus, setCutStatus] = useState("");
 
+  // Main tabs
+  const [mainTab, setMainTab] = useState<string>("analyze");
+
+  // Editor state
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  // Subtitle state
+  const [subtitles, setSubtitles] = useState<SubtitleSegment[]>([]);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcribeProgress, setTranscribeProgress] = useState(0);
+  const [transcribeStatus, setTranscribeStatus] = useState("");
+  const whisperWorkerRef = useRef<Worker | null>(null);
+
   const playerRef = useRef<HTMLIFrameElement>(null);
   const nativePlayerRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -65,6 +90,26 @@ const AppPage = () => {
   useEffect(() => {
     return () => {
       if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+    };
+  }, [localVideoUrl]);
+
+  // Track video time
+  useEffect(() => {
+    const video = nativePlayerRef.current;
+    if (!video) return;
+    const onTimeUpdate = () => setCurrentTime(video.currentTime);
+    const onLoaded = () => {
+      const dur = video.duration;
+      if (dur && isFinite(dur)) {
+        setVideoDuration(dur);
+        setTrimEnd(dur);
+      }
+    };
+    video.addEventListener("timeupdate", onTimeUpdate);
+    video.addEventListener("loadedmetadata", onLoaded);
+    return () => {
+      video.removeEventListener("timeupdate", onTimeUpdate);
+      video.removeEventListener("loadedmetadata", onLoaded);
     };
   }, [localVideoUrl]);
 
@@ -90,7 +135,6 @@ const AppPage = () => {
 
       clearInterval(progressInterval);
 
-      // supabase-js puts non-2xx body in data even when error is set
       const data = response.data;
       const error = response.error;
 
@@ -133,6 +177,10 @@ const AppPage = () => {
       return;
     }
     setUploadedFile(file);
+    // Immediately create preview URL
+    const objUrl = URL.createObjectURL(file);
+    if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+    setLocalVideoUrl(objUrl);
   };
 
   const handleAnalyzeUpload = async () => {
@@ -149,12 +197,10 @@ const AppPage = () => {
         setStatusText(status);
       });
 
-      const objUrl = URL.createObjectURL(uploadedFile);
-      if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
-      setLocalVideoUrl(objUrl);
       setClips(resultClips);
       setActiveClip(0);
       setPhase("results");
+      setMainTab("analyze");
     } catch (e: any) {
       console.error(e);
       toast({
@@ -223,7 +269,6 @@ const AppPage = () => {
       for (const { blob, title } of results) {
         const safeName = title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
         downloadBlob(blob, `${safeName}.mp4`);
-        // Small delay between downloads
         await new Promise((r) => setTimeout(r, 300));
       }
 
@@ -240,6 +285,101 @@ const AppPage = () => {
     }
   };
 
+  const handleTrimExport = async () => {
+    if (!uploadedFile) return;
+    setCutProgress(0);
+    setCuttingAll(true);
+    setCutStatus("Exportando trecho...");
+
+    try {
+      const blob = await trimVideo(uploadedFile, trimStart, trimEnd, (pct, status) => {
+        setCutProgress(pct);
+        setCutStatus(status);
+      });
+      const name = uploadedFile.name.replace(/\.[^.]+$/, "") + "_trim.mp4";
+      downloadBlob(blob, name);
+      toast({ title: "Vídeo cortado exportado!" });
+    } catch (e: any) {
+      toast({ title: "Erro", description: e.message, variant: "destructive" });
+    } finally {
+      setCuttingAll(false);
+    }
+  };
+
+  // Whisper transcription
+  const handleTranscribe = async () => {
+    if (!uploadedFile) return;
+
+    setTranscribing(true);
+    setTranscribeProgress(0);
+    setTranscribeStatus("Extraindo áudio do vídeo...");
+
+    try {
+      // Step 1: Extract audio WAV
+      const wavBlob = await extractAudioWav(uploadedFile, (pct, status) => {
+        setTranscribeProgress(Math.round(pct * 0.3));
+        setTranscribeStatus(status);
+      });
+
+      setTranscribeProgress(30);
+      setTranscribeStatus("Iniciando Whisper...");
+
+      // Step 2: Start whisper worker
+      const audioBuffer = await wavBlob.arrayBuffer();
+
+      const worker = new Worker(
+        new URL("../lib/whisperWorker.ts", import.meta.url),
+        { type: "module" }
+      );
+      whisperWorkerRef.current = worker;
+
+      worker.onmessage = (event) => {
+        const msg = event.data;
+        if (msg.type === "progress") {
+          setTranscribeProgress(30 + Math.round((msg.progress || 0) * 0.7));
+          setTranscribeStatus(msg.status || "Processando...");
+        } else if (msg.type === "result") {
+          const segs: SubtitleSegment[] = (msg.segments || []).map(
+            (s: any, i: number) => ({
+              id: i + 1,
+              start: s.start,
+              end: s.end,
+              text: s.text,
+            })
+          );
+          setSubtitles(segs);
+          setTranscribing(false);
+          setTranscribeProgress(100);
+          setTranscribeStatus("Transcrição concluída!");
+          toast({
+            title: "Legendas geradas!",
+            description: `${segs.length} segmentos transcritos.`,
+          });
+          worker.terminate();
+          whisperWorkerRef.current = null;
+        } else if (msg.type === "error") {
+          setTranscribing(false);
+          toast({
+            title: "Erro na transcrição",
+            description: msg.error || "Falha ao transcrever.",
+            variant: "destructive",
+          });
+          worker.terminate();
+          whisperWorkerRef.current = null;
+        }
+      };
+
+      worker.postMessage({ type: "transcribe", audioData: audioBuffer });
+    } catch (e: any) {
+      setTranscribing(false);
+      toast({
+        title: "Erro",
+        description: e.message || "Não foi possível extrair o áudio.",
+        variant: "destructive",
+      });
+    }
+  };
+
   const playClip = (index: number) => {
     setActiveClip(index);
     const clip = clips[index];
@@ -253,6 +393,12 @@ const AppPage = () => {
     }
   };
 
+  const seekTo = (time: number) => {
+    if (nativePlayerRef.current) {
+      nativePlayerRef.current.currentTime = time;
+    }
+  };
+
   const nextClip = () => playClip((activeClip + 1) % clips.length);
   const prevClip = () => playClip((activeClip - 1 + clips.length) % clips.length);
 
@@ -261,9 +407,18 @@ const AppPage = () => {
     setClips([]);
     setVideoId(null);
     setUploadedFile(null);
+    setSubtitles([]);
+    setTrimStart(0);
+    setTrimEnd(0);
+    setVideoDuration(0);
+    setMainTab("analyze");
     if (localVideoUrl) {
       URL.revokeObjectURL(localVideoUrl);
       setLocalVideoUrl(null);
+    }
+    if (whisperWorkerRef.current) {
+      whisperWorkerRef.current.terminate();
+      whisperWorkerRef.current = null;
     }
   };
 
@@ -281,13 +436,16 @@ const AppPage = () => {
   }, []);
 
   const isCutting = cuttingClip !== null || cuttingAll;
+  const hasVideo = !!uploadedFile && !!localVideoUrl;
 
-  return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      <div className="pt-28 px-6 pb-16 max-w-5xl mx-auto">
-        {/* Input Area */}
-        {phase !== "results" && (
+  // ====== RENDER ======
+
+  // Input phase (no video loaded yet)
+  if (phase === "input" && !hasVideo) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="pt-28 px-6 pb-16 max-w-5xl mx-auto">
           <div className="glass rounded-2xl p-6 mb-8">
             <Tabs value={mode} onValueChange={(v) => setMode(v as "youtube" | "upload")}>
               <TabsList className="mb-4 bg-secondary/60">
@@ -315,7 +473,7 @@ const AppPage = () => {
                     onClick={() => handleGenerateYoutube()}
                     size="lg"
                     className="h-12 px-8 gap-2 glow-primary font-semibold"
-                    disabled={phase === "processing"}
+                    disabled={false}
                   >
                     <Scissors className="w-4 h-4" />
                     Analisar Vídeo
@@ -332,9 +490,7 @@ const AppPage = () => {
                   className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all ${
                     isDragging
                       ? "border-primary bg-primary/5"
-                      : uploadedFile
-                        ? "border-primary/40 bg-primary/5"
-                        : "border-border/60 hover:border-primary/30 hover:bg-secondary/30"
+                      : "border-border/60 hover:border-primary/30 hover:bg-secondary/30"
                   }`}
                 >
                   <input
@@ -347,41 +503,51 @@ const AppPage = () => {
                       if (f) handleFileSelect(f);
                     }}
                   />
-                  {uploadedFile ? (
-                    <div className="flex flex-col items-center gap-3">
-                      <FileVideo className="w-10 h-10 text-primary" />
-                      <p className="font-semibold text-sm">{uploadedFile.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {(uploadedFile.size / 1024 / 1024).toFixed(1)} MB
-                      </p>
-                      <p className="text-xs text-muted-foreground">Clique para trocar o arquivo</p>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col items-center gap-3">
-                      <Upload className="w-10 h-10 text-muted-foreground" />
-                      <p className="font-semibold text-sm">Arraste um vídeo aqui ou clique para selecionar</p>
-                      <p className="text-xs text-muted-foreground">MP4, WebM, MOV ou MKV</p>
-                    </div>
-                  )}
+                  <div className="flex flex-col items-center gap-3">
+                    <Upload className="w-10 h-10 text-muted-foreground" />
+                    <p className="font-semibold text-sm">Arraste um vídeo aqui ou clique para selecionar</p>
+                    <p className="text-xs text-muted-foreground">MP4, WebM, MOV ou MKV</p>
+                  </div>
                 </div>
-                {uploadedFile && (
-                  <Button
-                    onClick={handleAnalyzeUpload}
-                    size="lg"
-                    className="mt-4 h-12 px-8 gap-2 glow-primary font-semibold w-full sm:w-auto"
-                    disabled={phase === "processing"}
-                  >
-                    <Scissors className="w-4 h-4" />
-                    Analisar Vídeo Localmente
-                  </Button>
-                )}
               </TabsContent>
             </Tabs>
           </div>
-        )}
 
-        {/* Processing */}
-        {phase === "processing" && (
+          {/* Empty states */}
+          {mode === "youtube" && (
+            <div className="text-center py-20 animate-fade-in">
+              <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mx-auto mb-6">
+                <ArrowRight className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <h3 className="font-display text-xl font-semibold mb-2">Cole um link acima para começar</h3>
+              <p className="text-muted-foreground text-sm">
+                A IA vai analisar a transcrição e identificar os melhores momentos para cortes.
+              </p>
+            </div>
+          )}
+
+          {mode === "upload" && (
+            <div className="text-center py-20 animate-fade-in">
+              <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mx-auto mb-6">
+                <FileVideo className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <h3 className="font-display text-xl font-semibold mb-2">Faça upload de um vídeo</h3>
+              <p className="text-muted-foreground text-sm">
+                A análise e edição rodam 100% no seu navegador — sem custos e sem enviar dados.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Processing phase
+  if (phase === "processing") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <div className="pt-28 px-6 pb-16 max-w-5xl mx-auto">
           <div className="glass rounded-2xl p-10 text-center animate-fade-in">
             <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6 animate-pulse-glow">
               <Scissors className="w-8 h-8 text-primary animate-spin" style={{ animationDuration: "3s" }} />
@@ -398,11 +564,51 @@ const AppPage = () => {
               </p>
             )}
           </div>
-        )}
+        </div>
+      </div>
+    );
+  }
+
+  // Main workspace: video loaded (results or upload-only)
+  return (
+    <div className="min-h-screen bg-background">
+      <Navbar />
+      <div className="pt-28 px-6 pb-16 max-w-6xl mx-auto">
+        {/* Top bar */}
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <FileVideo className="w-5 h-5 text-primary" />
+            <div>
+              <h2 className="font-display text-lg font-bold truncate max-w-xs">
+                {uploadedFile?.name || "Vídeo do YouTube"}
+              </h2>
+              {uploadedFile && (
+                <p className="text-xs text-muted-foreground">
+                  {(uploadedFile.size / 1024 / 1024).toFixed(1)} MB • {formatTime(videoDuration)}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {hasVideo && (
+              <ExportDialog
+                file={uploadedFile}
+                subtitles={subtitles}
+                trimStart={trimStart}
+                trimEnd={trimEnd}
+                duration={videoDuration}
+              />
+            )}
+            <Button variant="outline" size="sm" className="gap-2" onClick={resetAll}>
+              <RefreshCw className="w-4 h-4" />
+              Novo vídeo
+            </Button>
+          </div>
+        </div>
 
         {/* Cutting progress overlay */}
-        {isCutting && phase === "results" && (
-          <div className="glass rounded-2xl p-6 mb-6 animate-fade-in">
+        {isCutting && (
+          <div className="glass rounded-2xl p-4 mb-4 animate-fade-in">
             <div className="flex items-center gap-4">
               <Loader2 className="w-5 h-5 text-primary animate-spin shrink-0" />
               <div className="flex-1">
@@ -414,169 +620,296 @@ const AppPage = () => {
           </div>
         )}
 
-        {/* Results */}
-        {phase === "results" && clips.length > 0 && (
-          <div className="animate-slide-up">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="font-display text-2xl font-bold">
-                Melhores <span className="text-gradient">momentos</span>
-              </h2>
-              <div className="flex items-center gap-2">
-                {mode === "upload" && uploadedFile && (
+        {/* Main tabs */}
+        <Tabs value={mainTab} onValueChange={setMainTab}>
+          <TabsList className="mb-4 bg-secondary/60">
+            <TabsTrigger value="analyze" className="gap-2">
+              <Search className="w-3.5 h-3.5" />
+              Analisar
+            </TabsTrigger>
+            {hasVideo && (
+              <TabsTrigger value="edit" className="gap-2">
+                <Film className="w-3.5 h-3.5" />
+                Editar
+              </TabsTrigger>
+            )}
+            {hasVideo && (
+              <TabsTrigger value="subtitles" className="gap-2">
+                <Type className="w-3.5 h-3.5" />
+                Legendar
+              </TabsTrigger>
+            )}
+          </TabsList>
+
+          {/* ========== ANALYZE TAB ========== */}
+          <TabsContent value="analyze">
+            {/* If uploaded but not analyzed yet */}
+            {hasVideo && clips.length === 0 && (
+              <div className="glass rounded-2xl p-8 text-center">
+                <Search className="w-10 h-10 text-muted-foreground mx-auto mb-4" />
+                <h3 className="font-display text-lg font-semibold mb-2">Analisar vídeo</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Identifique automaticamente os melhores momentos do vídeo.
+                </p>
+                <Button onClick={handleAnalyzeUpload} className="gap-2 glow-primary">
+                  <Scissors className="w-4 h-4" />
+                  Analisar Vídeo Localmente
+                </Button>
+              </div>
+            )}
+
+            {/* Results */}
+            {clips.length > 0 && (
+              <div className="animate-slide-up">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-display text-xl font-bold">
+                    Melhores <span className="text-gradient">momentos</span>
+                  </h2>
+                  {mode === "upload" && uploadedFile && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="gap-2 glow-primary"
+                      onClick={handleCutAll}
+                      disabled={isCutting}
+                    >
+                      {cuttingAll ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                      Exportar todos
+                    </Button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                  {/* Player */}
+                  <div className="lg:col-span-3">
+                    <div className="glass rounded-xl overflow-hidden">
+                      <div className="aspect-video">
+                        {mode === "youtube" && videoId ? (
+                          <iframe
+                            ref={playerRef}
+                            src={`https://www.youtube.com/embed/${videoId}?start=${Math.floor(clips[activeClip]?.start_seconds || 0)}&end=${Math.floor(clips[activeClip]?.end_seconds || 0)}&autoplay=0&rel=0`}
+                            className="w-full h-full"
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        ) : localVideoUrl ? (
+                          <video
+                            ref={nativePlayerRef}
+                            src={localVideoUrl}
+                            controls
+                            className="w-full h-full bg-background"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="p-4 flex items-center justify-between">
+                        <div>
+                          <h3 className="font-display font-semibold text-sm">
+                            {clips[activeClip]?.title}
+                          </h3>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {formatTime(clips[activeClip]?.start_seconds || 0)} → {formatTime(clips[activeClip]?.end_seconds || 0)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button variant="ghost" size="icon" onClick={prevClip}>
+                            <SkipBack className="w-4 h-4" />
+                          </Button>
+                          <span className="text-xs text-muted-foreground">
+                            {activeClip + 1}/{clips.length}
+                          </span>
+                          <Button variant="ghost" size="icon" onClick={nextClip}>
+                            <SkipForward className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Clips list */}
+                  <div className="lg:col-span-2 space-y-3">
+                    <p className="text-sm text-muted-foreground mb-2">
+                      {clips.length} trechos identificados {mode === "youtube" ? "pela IA" : "pela análise local"}
+                    </p>
+                    {clips.map((clip, i) => (
+                      <div
+                        key={i}
+                        className={`w-full text-left glass rounded-xl p-4 transition-all hover:border-primary/30 ${
+                          activeClip === i ? "border-primary/50 glow-border" : ""
+                        }`}
+                      >
+                        <div className="flex items-start gap-3 cursor-pointer" onClick={() => playClip(i)}>
+                          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+                            <Play className="w-3.5 h-3.5 text-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-display text-sm font-semibold truncate">
+                              {clip.title}
+                            </h4>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {formatTime(clip.start_seconds)} → {formatTime(clip.end_seconds)}
+                            </p>
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              {clip.reason}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Flame className="w-3.5 h-3.5 text-primary" />
+                            <span className="text-xs font-semibold text-primary">{clip.score}</span>
+                          </div>
+                        </div>
+                        {mode === "upload" && uploadedFile && (
+                          <div className="mt-3 pt-3 border-t border-border/30">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full gap-2 text-xs"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCutClip(i);
+                              }}
+                              disabled={isCutting}
+                            >
+                              {cuttingClip === i ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Download className="w-3.5 h-3.5" />
+                              )}
+                              {cuttingClip === i ? "Cortando..." : "Exportar clip"}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ========== EDIT TAB ========== */}
+          <TabsContent value="edit">
+            <div className="space-y-6">
+              {/* Video preview */}
+              <div className="glass rounded-xl overflow-hidden">
+                <div className="aspect-video">
+                  <video
+                    ref={nativePlayerRef}
+                    src={localVideoUrl || ""}
+                    controls
+                    className="w-full h-full bg-background"
+                  />
+                </div>
+              </div>
+
+              {/* Timeline */}
+              <div className="glass rounded-xl p-4">
+                <h3 className="font-display text-sm font-semibold mb-3 flex items-center gap-2">
+                  <Scissors className="w-4 h-4 text-primary" />
+                  Timeline — Cortar vídeo
+                </h3>
+                <VideoTimeline
+                  duration={videoDuration}
+                  currentTime={currentTime}
+                  trimStart={trimStart}
+                  trimEnd={trimEnd}
+                  onTrimChange={(s, e) => {
+                    setTrimStart(s);
+                    setTrimEnd(e);
+                  }}
+                  onSeek={seekTo}
+                  markers={clips.map((c) => ({
+                    time: c.start_seconds,
+                    label: c.title,
+                  }))}
+                />
+
+                <div className="mt-4 flex items-center gap-3">
                   <Button
-                    variant="default"
-                    size="sm"
-                    className="gap-2 glow-primary"
-                    onClick={handleCutAll}
+                    onClick={handleTrimExport}
                     disabled={isCutting}
+                    className="gap-2"
                   >
-                    {cuttingAll ? (
+                    {isCutting ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <Download className="w-4 h-4" />
                     )}
-                    Exportar todos
+                    Exportar trecho selecionado
                   </Button>
-                )}
-                <Button variant="outline" size="sm" className="gap-2" onClick={resetAll}>
-                  <RefreshCw className="w-4 h-4" />
-                  Novo vídeo
-                </Button>
+                  <p className="text-xs text-muted-foreground">
+                    {formatTime(trimStart)} → {formatTime(trimEnd)} ({formatTime(trimEnd - trimStart)})
+                  </p>
+                </div>
               </div>
             </div>
+          </TabsContent>
 
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-              {/* Player */}
-              <div className="lg:col-span-3">
+          {/* ========== SUBTITLES TAB ========== */}
+          <TabsContent value="subtitles">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Video preview */}
+              <div className="space-y-4">
                 <div className="glass rounded-xl overflow-hidden">
                   <div className="aspect-video">
-                    {mode === "youtube" && videoId ? (
-                      <iframe
-                        ref={playerRef}
-                        src={`https://www.youtube.com/embed/${videoId}?start=${Math.floor(clips[activeClip]?.start_seconds || 0)}&end=${Math.floor(clips[activeClip]?.end_seconds || 0)}&autoplay=0&rel=0`}
-                        className="w-full h-full"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    ) : localVideoUrl ? (
-                      <video
-                        ref={nativePlayerRef}
-                        src={localVideoUrl}
-                        controls
-                        className="w-full h-full bg-black"
-                      />
-                    ) : null}
+                    <video
+                      ref={nativePlayerRef}
+                      src={localVideoUrl || ""}
+                      controls
+                      className="w-full h-full bg-background"
+                    />
                   </div>
-                  {/* Player controls */}
-                  <div className="p-4 flex items-center justify-between">
-                    <div>
-                      <h3 className="font-display font-semibold text-sm">
-                        {clips[activeClip]?.title}
-                      </h3>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {formatTime(clips[activeClip]?.start_seconds || 0)} → {formatTime(clips[activeClip]?.end_seconds || 0)}
-                      </p>
+                </div>
+
+                {/* Transcribe button */}
+                <div className="glass rounded-xl p-4">
+                  <Button
+                    onClick={handleTranscribe}
+                    disabled={transcribing}
+                    className="w-full gap-2 glow-primary"
+                  >
+                    {transcribing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                    {transcribing ? "Transcrevendo..." : "Gerar legendas automaticamente"}
+                  </Button>
+
+                  {transcribing && (
+                    <div className="mt-3">
+                      <p className="text-xs text-muted-foreground mb-1">{transcribeStatus}</p>
+                      <Progress value={transcribeProgress} className="h-1.5" />
+                      <p className="text-xs text-muted-foreground mt-1">{transcribeProgress}%</p>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="icon" onClick={prevClip}>
-                        <SkipBack className="w-4 h-4" />
-                      </Button>
-                      <span className="text-xs text-muted-foreground">
-                        {activeClip + 1}/{clips.length}
-                      </span>
-                      <Button variant="ghost" size="icon" onClick={nextClip}>
-                        <SkipForward className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
+                  )}
+
+                  <p className="text-xs text-muted-foreground mt-3">
+                    Usa Whisper (IA) 100% no navegador. ~75MB na primeira vez (fica em cache).
+                    Pode demorar alguns minutos dependendo do vídeo.
+                  </p>
                 </div>
               </div>
 
-              {/* Clips list */}
-              <div className="lg:col-span-2 space-y-3">
-                <p className="text-sm text-muted-foreground mb-2">
-                  {clips.length} trechos identificados {mode === "youtube" ? "pela IA" : "pela análise local"}
-                </p>
-                {clips.map((clip, i) => (
-                  <div
-                    key={i}
-                    className={`w-full text-left glass rounded-xl p-4 transition-all hover:border-primary/30 ${
-                      activeClip === i ? "border-primary/50 glow-border" : ""
-                    }`}
-                  >
-                    <div className="flex items-start gap-3 cursor-pointer" onClick={() => playClip(i)}>
-                      <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                        <Play className="w-3.5 h-3.5 text-primary" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h4 className="font-display text-sm font-semibold truncate">
-                          {clip.title}
-                        </h4>
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {formatTime(clip.start_seconds)} → {formatTime(clip.end_seconds)}
-                        </p>
-                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                          {clip.reason}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Flame className="w-3.5 h-3.5 text-primary" />
-                        <span className="text-xs font-semibold text-primary">{clip.score}</span>
-                      </div>
-                    </div>
-                    {/* Download button for upload mode */}
-                    {mode === "upload" && uploadedFile && (
-                      <div className="mt-3 pt-3 border-t border-border/30">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="w-full gap-2 text-xs"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCutClip(i);
-                          }}
-                          disabled={isCutting}
-                        >
-                          {cuttingClip === i ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Download className="w-3.5 h-3.5" />
-                          )}
-                          {cuttingClip === i ? "Cortando..." : "Exportar clip"}
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                ))}
+              {/* Subtitle editor */}
+              <div className="glass rounded-xl p-4">
+                <h3 className="font-display text-sm font-semibold mb-3 flex items-center gap-2">
+                  <Type className="w-4 h-4 text-primary" />
+                  Editor de Legendas
+                </h3>
+                <SubtitleEditor
+                  segments={subtitles}
+                  onSegmentsChange={setSubtitles}
+                  onSeekTo={seekTo}
+                  filename={uploadedFile?.name.replace(/\.[^.]+$/, "")}
+                />
               </div>
             </div>
-          </div>
-        )}
-
-        {/* Empty state */}
-        {phase === "input" && !uploadedFile && mode === "youtube" && (
-          <div className="text-center py-20 animate-fade-in">
-            <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mx-auto mb-6">
-              <ArrowRight className="w-8 h-8 text-muted-foreground" />
-            </div>
-            <h3 className="font-display text-xl font-semibold mb-2">Cole um link acima para começar</h3>
-            <p className="text-muted-foreground text-sm">
-              A IA vai analisar a transcrição e identificar os melhores momentos para cortes.
-            </p>
-          </div>
-        )}
-
-        {phase === "input" && mode === "upload" && !uploadedFile && (
-          <div className="text-center py-20 animate-fade-in">
-            <div className="w-20 h-20 rounded-full bg-primary/5 flex items-center justify-center mx-auto mb-6">
-              <FileVideo className="w-8 h-8 text-muted-foreground" />
-            </div>
-            <h3 className="font-display text-xl font-semibold mb-2">Faça upload de um vídeo</h3>
-            <p className="text-muted-foreground text-sm">
-              A análise roda 100% no seu navegador — sem custos e sem enviar dados.
-            </p>
-          </div>
-        )}
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );
