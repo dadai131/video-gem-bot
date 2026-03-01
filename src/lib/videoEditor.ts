@@ -173,6 +173,20 @@ export async function extractAudioWav(
   file: File,
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
+  // Try FFmpeg first, fall back to Web Audio API
+  try {
+    return await extractAudioWavFFmpeg(file, onProgress);
+  } catch (e) {
+    console.warn("[extractAudioWav] FFmpeg failed, using Web Audio API fallback:", e);
+    onProgress(10, "Usando método alternativo de extração...");
+    return await extractAudioWavWebAPI(file, onProgress);
+  }
+}
+
+async function extractAudioWavFFmpeg(
+  file: File,
+  onProgress: EditorProgressCallback
+): Promise<Blob> {
   onProgress(5, "Carregando motor de edição...");
   const ffmpeg = await getSharedFFmpeg(onProgress);
 
@@ -182,7 +196,7 @@ export async function extractAudioWav(
   await ffmpeg.writeFile(inputName, await fetchFile(file));
 
   onProgress(20, "Extraindo áudio...");
-  
+
   ffmpeg.on("progress", ({ progress }) => {
     onProgress(20 + Math.round(progress * 65), "Extraindo áudio...");
   });
@@ -203,4 +217,79 @@ export async function extractAudioWav(
 
   onProgress(100, "Áudio extraído!");
   return new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "audio/wav" });
+}
+
+async function extractAudioWavWebAPI(
+  file: File,
+  onProgress: EditorProgressCallback
+): Promise<Blob> {
+  onProgress(15, "Decodificando áudio do vídeo...");
+
+  const arrayBuffer = await file.arrayBuffer();
+  const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+
+  onProgress(30, "Processando áudio...");
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+
+  onProgress(60, "Convertendo para WAV...");
+  // Get mono channel data
+  const channelData = audioBuffer.getChannelData(0);
+  const sampleRate = audioBuffer.sampleRate;
+
+  // Resample to 16000 Hz if needed
+  let samples: Float32Array;
+  if (sampleRate !== 16000) {
+    const ratio = sampleRate / 16000;
+    const newLength = Math.floor(channelData.length / ratio);
+    samples = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      samples[i] = channelData[Math.floor(i * ratio)];
+    }
+  } else {
+    samples = channelData;
+  }
+
+  onProgress(80, "Gerando arquivo WAV...");
+  // Build WAV file
+  const wavBuffer = encodeWAV(samples, 16000);
+
+  await audioCtx.close();
+  onProgress(100, "Áudio extraído!");
+  return new Blob([wavBuffer], { type: "audio/wav" });
+}
+
+function encodeWAV(samples: Float32Array, sampleRate: number): ArrayBuffer {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  // WAV header
+  writeString(view, 0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(view, 8, "WAVE");
+  writeString(view, 12, "fmt ");
+  view.setUint32(16, 16, true); // chunk size
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeString(view, 36, "data");
+  view.setUint32(40, samples.length * 2, true);
+
+  // Convert float to int16
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return buffer;
+}
+
+function writeString(view: DataView, offset: number, str: string) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
 }
