@@ -1,7 +1,7 @@
-import { fetchFile } from "@ffmpeg/util";
-import { getSharedFFmpeg, type ProgressCallback } from "./ffmpegSingleton";
+export type EditorProgressCallback = (percent: number, status: string) => void;
 
-export type EditorProgressCallback = ProgressCallback;
+// Re-use the browser-native recording approach
+import type { ProgressCallback } from "./videoCutter";
 
 export async function trimVideo(
   file: File,
@@ -9,217 +9,11 @@ export async function trimVideo(
   endSeconds: number,
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
-  onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getSharedFFmpeg(onProgress);
-
-  onProgress(15, "Preparando vídeo...");
-  const inputName = "trim_input.mp4";
-  const outputName = "trim_output.mp4";
-
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-  onProgress(30, "Cortando vídeo...");
-  const duration = endSeconds - startSeconds;
-
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress(30 + Math.round(progress * 55), "Cortando vídeo...");
-  });
-
-  await ffmpeg.exec([
-    "-i", inputName,
-    "-ss", String(startSeconds),
-    "-t", String(duration),
-    "-c", "copy",
-    "-avoid_negative_ts", "make_zero",
-    outputName,
-  ]);
-
-  onProgress(90, "Finalizando...");
-  const data = await ffmpeg.readFile(outputName) as Uint8Array;
-
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  onProgress(100, "Pronto!");
-  return new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "video/mp4" });
-}
-
-export async function splitVideo(
-  file: File,
-  splitPoints: number[],
-  onProgress: EditorProgressCallback
-): Promise<Blob[]> {
-  onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getSharedFFmpeg(onProgress);
-
-  const inputName = "split_input.mp4";
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-  const video = document.createElement("video");
-  video.src = URL.createObjectURL(file);
-  await new Promise<void>((r) => { video.onloadedmetadata = () => r(); });
-  const totalDuration = video.duration;
-  URL.revokeObjectURL(video.src);
-
-  const points = [0, ...splitPoints.sort((a, b) => a - b), totalDuration];
-  const results: Blob[] = [];
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const start = points[i];
-    const dur = points[i + 1] - start;
-    const outName = `split_${i}.mp4`;
-
-    const pct = 20 + (i / (points.length - 1)) * 70;
-    onProgress(Math.round(pct), `Cortando parte ${i + 1}/${points.length - 1}...`);
-
-    await ffmpeg.exec([
-      "-i", inputName,
-      "-ss", String(start),
-      "-t", String(dur),
-      "-c", "copy",
-      "-avoid_negative_ts", "make_zero",
-      outName,
-    ]);
-
-    const data = await ffmpeg.readFile(outName) as Uint8Array;
-    results.push(new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "video/mp4" }));
-    await ffmpeg.deleteFile(outName);
-  }
-
-  await ffmpeg.deleteFile(inputName);
-  onProgress(100, "Pronto!");
-  return results;
-}
-
-export async function removeSegments(
-  file: File,
-  segmentsToRemove: { start: number; end: number }[],
-  onProgress: EditorProgressCallback
-): Promise<Blob> {
-  onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getSharedFFmpeg(onProgress);
-
-  const inputName = "remove_input.mp4";
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-  const video = document.createElement("video");
-  video.src = URL.createObjectURL(file);
-  await new Promise<void>((r) => { video.onloadedmetadata = () => r(); });
-  const totalDuration = video.duration;
-  URL.revokeObjectURL(video.src);
-
-  const sorted = [...segmentsToRemove].sort((a, b) => a.start - b.start);
-  const keepSegments: { start: number; end: number }[] = [];
-  let cursor = 0;
-
-  for (const seg of sorted) {
-    if (seg.start > cursor) {
-      keepSegments.push({ start: cursor, end: seg.start });
-    }
-    cursor = Math.max(cursor, seg.end);
-  }
-  if (cursor < totalDuration) {
-    keepSegments.push({ start: cursor, end: totalDuration });
-  }
-
-  if (keepSegments.length === 0) {
-    throw new Error("Não há conteúdo restante após remover os trechos.");
-  }
-
-  const partFiles: string[] = [];
-  for (let i = 0; i < keepSegments.length; i++) {
-    const seg = keepSegments[i];
-    const outName = `keep_${i}.mp4`;
-    partFiles.push(outName);
-
-    const pct = 15 + (i / keepSegments.length) * 60;
-    onProgress(Math.round(pct), `Processando parte ${i + 1}/${keepSegments.length}...`);
-
-    await ffmpeg.exec([
-      "-i", inputName,
-      "-ss", String(seg.start),
-      "-t", String(seg.end - seg.start),
-      "-c", "copy",
-      "-avoid_negative_ts", "make_zero",
-      outName,
-    ]);
-  }
-
-  onProgress(80, "Concatenando...");
-  const concatContent = partFiles.map((f) => `file '${f}'`).join("\n");
-  await ffmpeg.writeFile("concat.txt", new TextEncoder().encode(concatContent));
-
-  const finalOut = "remove_output.mp4";
-  await ffmpeg.exec([
-    "-f", "concat",
-    "-safe", "0",
-    "-i", "concat.txt",
-    "-c", "copy",
-    finalOut,
-  ]);
-
-  const data = await ffmpeg.readFile(finalOut) as Uint8Array;
-
-  for (const f of partFiles) await ffmpeg.deleteFile(f);
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile("concat.txt");
-  await ffmpeg.deleteFile(finalOut);
-
-  onProgress(100, "Pronto!");
-  return new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "video/mp4" });
+  onProgress(5, "Preparando vídeo...");
+  return recordSegment(file, startSeconds, endSeconds, onProgress);
 }
 
 export async function extractAudioWav(
-  file: File,
-  onProgress: EditorProgressCallback
-): Promise<Blob> {
-  // Try FFmpeg first, fall back to Web Audio API
-  try {
-    return await extractAudioWavFFmpeg(file, onProgress);
-  } catch (e) {
-    console.warn("[extractAudioWav] FFmpeg failed, using Web Audio API fallback:", e);
-    onProgress(10, "Usando método alternativo de extração...");
-    return await extractAudioWavWebAPI(file, onProgress);
-  }
-}
-
-async function extractAudioWavFFmpeg(
-  file: File,
-  onProgress: EditorProgressCallback
-): Promise<Blob> {
-  onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getSharedFFmpeg(onProgress);
-
-  const inputName = "audio_input.mp4";
-  const outputName = "audio_output.wav";
-
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-  onProgress(20, "Extraindo áudio...");
-
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress(20 + Math.round(progress * 65), "Extraindo áudio...");
-  });
-
-  await ffmpeg.exec([
-    "-i", inputName,
-    "-ar", "16000",
-    "-ac", "1",
-    "-f", "wav",
-    outputName,
-  ]);
-
-  onProgress(90, "Finalizando...");
-  const data = await ffmpeg.readFile(outputName) as Uint8Array;
-
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
-
-  onProgress(100, "Áudio extraído!");
-  return new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "audio/wav" });
-}
-
-async function extractAudioWavWebAPI(
   file: File,
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
@@ -232,7 +26,6 @@ async function extractAudioWavWebAPI(
   const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
 
   onProgress(60, "Convertendo para WAV...");
-  // Get mono channel data
   const channelData = audioBuffer.getChannelData(0);
   const sampleRate = audioBuffer.sampleRate;
 
@@ -250,7 +43,6 @@ async function extractAudioWavWebAPI(
   }
 
   onProgress(80, "Gerando arquivo WAV...");
-  // Build WAV file
   const wavBuffer = encodeWAV(samples, 16000);
 
   await audioCtx.close();
@@ -258,26 +50,142 @@ async function extractAudioWavWebAPI(
   return new Blob([wavBuffer], { type: "audio/wav" });
 }
 
+/**
+ * Record a segment of video using Canvas + MediaRecorder (no FFmpeg).
+ */
+async function recordSegment(
+  file: File,
+  startSeconds: number,
+  endSeconds: number,
+  onProgress: EditorProgressCallback
+): Promise<Blob> {
+  const duration = endSeconds - startSeconds;
+
+  const video = document.createElement("video");
+  video.playsInline = true;
+  video.preload = "auto";
+
+  const videoUrl = URL.createObjectURL(file);
+  video.src = videoUrl;
+
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error("Não foi possível carregar o vídeo."));
+  });
+
+  onProgress(10, "Preparando gravação...");
+
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+  const ctx = canvas.getContext("2d")!;
+
+  const canvasStream = canvas.captureStream(30);
+
+  let combinedStream: MediaStream;
+  try {
+    const audioCtx = new AudioContext();
+    const source = audioCtx.createMediaElementSource(video);
+    const destination = audioCtx.createMediaStreamDestination();
+    source.connect(destination);
+    source.connect(audioCtx.destination);
+
+    const audioTrack = destination.stream.getAudioTracks()[0];
+    combinedStream = audioTrack
+      ? new MediaStream([...canvasStream.getVideoTracks(), audioTrack])
+      : canvasStream;
+  } catch {
+    combinedStream = canvasStream;
+  }
+
+  video.muted = true;
+
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+    ? "video/webm;codecs=vp9,opus"
+    : MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+    ? "video/webm;codecs=vp8,opus"
+    : "video/webm";
+
+  const recorder = new MediaRecorder(combinedStream, {
+    mimeType,
+    videoBitsPerSecond: 5_000_000,
+  });
+
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+
+  video.currentTime = startSeconds;
+  await new Promise<void>((resolve) => {
+    video.onseeked = () => resolve();
+  });
+
+  onProgress(15, "Cortando vídeo...");
+
+  return new Promise<Blob>((resolve, reject) => {
+    recorder.onstop = () => {
+      URL.revokeObjectURL(videoUrl);
+      const blob = new Blob(chunks, { type: mimeType });
+      onProgress(100, "Pronto!");
+      resolve(blob);
+    };
+
+    recorder.onerror = () => {
+      URL.revokeObjectURL(videoUrl);
+      reject(new Error("Erro na gravação do vídeo."));
+    };
+
+    let animFrame: number;
+    const drawFrame = () => {
+      if (video.currentTime >= endSeconds || video.ended) {
+        cancelAnimationFrame(animFrame);
+        video.pause();
+        recorder.stop();
+        return;
+      }
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      const elapsed = video.currentTime - startSeconds;
+      const pct = 15 + Math.round((elapsed / duration) * 80);
+      onProgress(Math.min(pct, 95), `Cortando... ${Math.round(elapsed)}s / ${Math.round(duration)}s`);
+
+      animFrame = requestAnimationFrame(drawFrame);
+    };
+
+    recorder.start(100);
+    video.play().then(() => {
+      drawFrame();
+    }).catch(reject);
+
+    setTimeout(() => {
+      if (recorder.state === "recording") {
+        video.pause();
+        recorder.stop();
+      }
+    }, (duration + 5) * 1000);
+  });
+}
+
 function encodeWAV(samples: Float32Array, sampleRate: number): ArrayBuffer {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
 
-  // WAV header
   writeString(view, 0, "RIFF");
   view.setUint32(4, 36 + samples.length * 2, true);
   writeString(view, 8, "WAVE");
   writeString(view, 12, "fmt ");
-  view.setUint32(16, 16, true); // chunk size
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, 1, true); // mono
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
   view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
   writeString(view, 36, "data");
   view.setUint32(40, samples.length * 2, true);
 
-  // Convert float to int16
   let offset = 44;
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i]));

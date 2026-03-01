@@ -1,19 +1,4 @@
-import { fetchFile } from "@ffmpeg/util";
-import { getSharedFFmpeg, type ProgressCallback } from "./ffmpegSingleton";
-
-export type ExportProgressCallback = ProgressCallback;
-
-function escapeDrawtext(text: string): string {
-  // Escape special chars for FFmpeg drawtext filter
-  return text
-    .replace(/\\/g, "\\\\\\\\")
-    .replace(/'/g, "'\\\\\\''")
-    .replace(/:/g, "\\\\:")
-    .replace(/\[/g, "\\\\[")
-    .replace(/\]/g, "\\\\]")
-    .replace(/%/g, "%%")
-    .replace(/;/g, "\\\\;");
-}
+export type ExportProgressCallback = (percent: number, status: string) => void;
 
 function parseSRT(srt: string): { start: number; end: number; text: string }[] {
   const blocks = srt.trim().split(/\n\n+/);
@@ -35,57 +20,149 @@ function parseSRT(srt: string): { start: number; end: number; text: string }[] {
   return result;
 }
 
-function buildDrawtextFilter(segments: { start: number; end: number; text: string }[]): string {
-  // Build chained drawtext filters for anime/TikTok style
-  return segments.map((seg) => {
-    const upperText = escapeDrawtext(seg.text.toUpperCase());
-    return `drawtext=text='${upperText}':fontcolor=#FFD400:fontsize=48:borderw=4:bordercolor=black:shadowcolor=black:shadowx=3:shadowy=3:x=(w-text_w)/2:y=h-h/6:enable='between(t,${seg.start.toFixed(3)},${seg.end.toFixed(3)})'`;
-  }).join(",");
-}
-
+/**
+ * Export video with burned-in subtitles using Canvas + MediaRecorder.
+ * Draws subtitle text directly on the canvas while recording.
+ */
 export async function exportWithBurnedSubtitles(
   file: File,
   srtContent: string,
   onProgress: ExportProgressCallback
 ): Promise<Blob> {
-  onProgress(5, "Carregando motor de exportação...");
-  const ffmpeg = await getSharedFFmpeg(onProgress);
-
-  const inputName = "burn_input.mp4";
-  const outputName = "burn_output.mp4";
-
-  onProgress(12, "Preparando vídeo...");
-  await ffmpeg.writeFile(inputName, await fetchFile(file));
-
   const segments = parseSRT(srtContent);
   if (segments.length === 0) {
     throw new Error("Nenhuma legenda encontrada para embutir.");
   }
 
-  onProgress(15, "Embutindo legendas (re-encode, pode demorar)...");
+  onProgress(5, "Preparando vídeo...");
 
-  // Build drawtext filter chain (works without libass)
-  const vf = buildDrawtextFilter(segments);
+  const video = document.createElement("video");
+  video.playsInline = true;
+  video.preload = "auto";
 
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress(15 + Math.round(progress * 75), "Renderizando vídeo com legendas...");
+  const videoUrl = URL.createObjectURL(file);
+  video.src = videoUrl;
+
+  await new Promise<void>((resolve, reject) => {
+    video.onloadedmetadata = () => resolve();
+    video.onerror = () => reject(new Error("Não foi possível carregar o vídeo."));
   });
 
-  await ffmpeg.exec([
-    "-i", inputName,
-    "-vf", vf,
-    "-c:a", "copy",
-    outputName,
-  ]);
+  const totalDuration = video.duration;
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
+  const ctx = canvas.getContext("2d")!;
 
-  onProgress(92, "Finalizando...");
-  const data = await ffmpeg.readFile(outputName) as Uint8Array;
+  const canvasStream = canvas.captureStream(30);
 
-  await ffmpeg.deleteFile(inputName);
-  await ffmpeg.deleteFile(outputName);
+  // Try to capture audio
+  let combinedStream: MediaStream;
+  try {
+    const audioCtx = new AudioContext();
+    const source = audioCtx.createMediaElementSource(video);
+    const destination = audioCtx.createMediaStreamDestination();
+    source.connect(destination);
+    source.connect(audioCtx.destination);
 
-  onProgress(100, "Exportação concluída!");
-  return new Blob([new Uint8Array(data.buffer as ArrayBuffer)], { type: "video/mp4" });
+    const audioTrack = destination.stream.getAudioTracks()[0];
+    combinedStream = audioTrack
+      ? new MediaStream([...canvasStream.getVideoTracks(), audioTrack])
+      : canvasStream;
+  } catch {
+    combinedStream = canvasStream;
+  }
+
+  video.muted = true;
+
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+    ? "video/webm;codecs=vp9,opus"
+    : "video/webm";
+
+  const recorder = new MediaRecorder(combinedStream, {
+    mimeType,
+    videoBitsPerSecond: 5_000_000,
+  });
+
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+
+  onProgress(10, "Renderizando vídeo com legendas...");
+
+  return new Promise<Blob>((resolve, reject) => {
+    recorder.onstop = () => {
+      URL.revokeObjectURL(videoUrl);
+      const blob = new Blob(chunks, { type: mimeType });
+      onProgress(100, "Exportação concluída!");
+      resolve(blob);
+    };
+
+    recorder.onerror = () => {
+      URL.revokeObjectURL(videoUrl);
+      reject(new Error("Erro na gravação do vídeo."));
+    };
+
+    let animFrame: number;
+    const drawFrame = () => {
+      if (video.ended) {
+        cancelAnimationFrame(animFrame);
+        video.pause();
+        recorder.stop();
+        return;
+      }
+
+      const currentTime = video.currentTime;
+
+      // Draw video frame
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Draw active subtitles
+      const activeSeg = segments.find(
+        (s) => currentTime >= s.start && currentTime <= s.end
+      );
+      if (activeSeg) {
+        const fontSize = Math.round(canvas.height / 15);
+        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+
+        const text = activeSeg.text.toUpperCase();
+        const x = canvas.width / 2;
+        const y = canvas.height - canvas.height / 8;
+
+        // Black outline
+        ctx.strokeStyle = "black";
+        ctx.lineWidth = fontSize / 6;
+        ctx.lineJoin = "round";
+        ctx.strokeText(text, x, y);
+
+        // Yellow fill
+        ctx.fillStyle = "#FFD400";
+        ctx.fillText(text, x, y);
+      }
+
+      // Progress
+      const pct = 10 + Math.round((currentTime / totalDuration) * 85);
+      onProgress(Math.min(pct, 95), "Renderizando vídeo com legendas...");
+
+      animFrame = requestAnimationFrame(drawFrame);
+    };
+
+    recorder.start(100);
+    video.play().then(() => {
+      drawFrame();
+    }).catch(reject);
+
+    // Safety timeout
+    setTimeout(() => {
+      if (recorder.state === "recording") {
+        video.pause();
+        recorder.stop();
+      }
+    }, (totalDuration + 10) * 1000);
+  });
 }
 
 export async function exportVideoAndSubtitles(
@@ -93,7 +170,6 @@ export async function exportVideoAndSubtitles(
   srtContent: string,
   onProgress: ExportProgressCallback
 ): Promise<{ videoBlob: Blob; subtitledBlob: Blob }> {
-  // Export both: clean video + video with burned subtitles
   onProgress(2, "Preparando exportação dupla...");
 
   // 1. Clean video (just copy)
