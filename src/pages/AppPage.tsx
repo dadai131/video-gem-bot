@@ -30,6 +30,7 @@ import {
   Type,
   Search,
   Mic,
+  Bell,
 } from "lucide-react";
 
 function formatTime(s: number) {
@@ -675,7 +676,13 @@ const AppPage = () => {
       <div className="min-h-screen bg-background">
         <Navbar />
         <div className="pt-28 px-6 pb-16 max-w-5xl mx-auto">
-          <div className="glass rounded-2xl p-10 text-center animate-fade-in">
+          <div className="relative glass rounded-2xl p-10 text-center animate-fade-in">
+            {/* Bell badge with percentage */}
+            <div className="absolute -top-4 right-6 flex items-center gap-1.5 bg-primary text-primary-foreground px-3 py-1.5 rounded-full shadow-lg animate-bounce" style={{ animationDuration: "2s" }}>
+              <Bell className="w-4 h-4" />
+              <span className="text-sm font-bold">{Math.round(progress)}%</span>
+            </div>
+
             <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-6 animate-pulse-glow">
               <Scissors className="w-8 h-8 text-primary animate-spin" style={{ animationDuration: "3s" }} />
             </div>
