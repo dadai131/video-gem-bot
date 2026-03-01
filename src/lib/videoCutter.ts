@@ -1,46 +1,15 @@
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { toBlobURL, fetchFile } from "@ffmpeg/util";
-
-let ffmpegInstance: FFmpeg | null = null;
-let ffmpegLoaded = false;
-
-type CutProgressCallback = (percent: number, status: string) => void;
-
-async function getFFmpeg(onProgress?: CutProgressCallback): Promise<FFmpeg> {
-  if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
-
-  const ffmpeg = new FFmpeg();
-
-  ffmpeg.on("log", ({ message }) => {
-    console.log("[FFmpeg]", message);
-  });
-
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress?.(Math.round(progress * 100), "Cortando vídeo...");
-  });
-
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-  });
-
-  ffmpegInstance = ffmpeg;
-  ffmpegLoaded = true;
-  return ffmpeg;
-}
+import { fetchFile } from "@ffmpeg/util";
+import { getSharedFFmpeg, type ProgressCallback } from "./ffmpegSingleton";
 
 export async function cutVideoClip(
   file: File,
   startSeconds: number,
   endSeconds: number,
   clipIndex: number,
-  onProgress: CutProgressCallback
+  onProgress: ProgressCallback
 ): Promise<Blob> {
   onProgress(5, "Carregando motor de edição...");
-
-  const ffmpeg = await getFFmpeg(onProgress);
+  const ffmpeg = await getSharedFFmpeg(onProgress);
 
   onProgress(20, "Preparando vídeo...");
 
@@ -52,6 +21,10 @@ export async function cutVideoClip(
   onProgress(30, "Cortando vídeo...");
 
   const duration = endSeconds - startSeconds;
+
+  ffmpeg.on("progress", ({ progress }) => {
+    onProgress(30 + Math.round(progress * 60), "Cortando vídeo...");
+  });
 
   await ffmpeg.exec([
     "-i", inputName,
@@ -66,7 +39,6 @@ export async function cutVideoClip(
 
   const data = await ffmpeg.readFile(outputName) as Uint8Array;
 
-  // Cleanup
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile(outputName);
 

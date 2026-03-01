@@ -13,7 +13,7 @@ import { Download, FileVideo, FileText, Film, Loader2, AlertTriangle } from "luc
 import type { SubtitleSegment } from "@/lib/subtitleUtils";
 import { generateSRT, downloadSRT } from "@/lib/subtitleUtils";
 import { trimVideo } from "@/lib/videoEditor";
-import { exportWithBurnedSubtitles } from "@/lib/exportModule";
+import { exportWithBurnedSubtitles, exportVideoAndSubtitles } from "@/lib/exportModule";
 import { downloadBlob } from "@/lib/videoCutter";
 
 interface ExportDialogProps {
@@ -80,6 +80,30 @@ const ExportDialog = ({
       });
       const name = file.name.replace(/\.[^.]+$/, "") + "_legendado.mp4";
       downloadBlob(blob, name);
+    } catch (e: any) {
+      console.error(e);
+    } finally {
+      setExporting(false);
+      setExportProgress(0);
+    }
+  };
+
+  const handleExportBoth = async () => {
+    if (!file || !hasSubtitles) return;
+    setExporting(true);
+    try {
+      const srt = generateSRT(subtitles);
+      const { videoBlob, subtitledBlob } = await exportVideoAndSubtitles(file, srt, (p, s) => {
+        setExportProgress(p);
+        setExportStatus(s);
+      });
+      const baseName = file.name.replace(/\.[^.]+$/, "");
+      downloadBlob(videoBlob, `${baseName}.mp4`);
+      await new Promise((r) => setTimeout(r, 500));
+      downloadBlob(subtitledBlob, `${baseName}_legendado.mp4`);
+      // Also download SRT
+      await new Promise((r) => setTimeout(r, 300));
+      downloadSRT(srt, baseName);
     } catch (e: any) {
       console.error(e);
     } finally {
@@ -166,6 +190,23 @@ const ExportDialog = ({
                   ) : (
                     "Gere legendas primeiro na aba Legendar"
                   )}
+                </p>
+              </div>
+            </button>
+
+            {/* Export both (video + subtitled + srt) */}
+            <button
+              onClick={handleExportBoth}
+              disabled={!hasSubtitles}
+              className="w-full flex items-start gap-3 p-3 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-all text-left disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <Download className="w-5 h-5 text-primary mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-semibold">Pacote completo (tudo junto)</p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {hasSubtitles
+                    ? "Baixa: vídeo sem legenda + vídeo com legenda + arquivo .srt"
+                    : "Gere legendas primeiro na aba Legendar"}
                 </p>
               </div>
             </button>
