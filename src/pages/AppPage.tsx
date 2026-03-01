@@ -269,7 +269,8 @@ const AppPage = () => {
         (pct, status) => {
           setCutProgress(pct);
           setCutStatus(status);
-        }
+        },
+        subtitles.length > 0 ? subtitles : undefined
       );
 
       const safeName = clip.title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
@@ -302,7 +303,8 @@ const AppPage = () => {
           const overallPct = Math.round(((clipIdx + pct / 100) / clips.length) * 100);
           setCutProgress(overallPct);
           setCutStatus(`Cortando clip ${clipIdx + 1}/${clips.length}...`);
-        }
+        },
+        subtitles.length > 0 ? subtitles : undefined
       );
 
       for (const { blob, title } of results) {
