@@ -1,4 +1,4 @@
-import { Scissors } from "lucide-react";
+import { Scissors, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 
@@ -15,6 +15,10 @@ const Navbar = () => {
           <Link to="/app" className="hover:text-foreground transition-colors">App</Link>
         </div>
         <div className="flex items-center gap-3">
+          <button className="relative p-2 rounded-full hover:bg-secondary/60 transition-colors">
+            <Bell className="w-5 h-5 text-muted-foreground" />
+            <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
+          </button>
           <Button variant="ghost" size="sm" asChild>
             <Link to="/app">Login</Link>
           </Button>

@@ -88,9 +88,18 @@ const AppPage = () => {
   const nativePlayerRef = useRef<HTMLVideoElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Auto-start if URL came from query params
+  // Auto-start if URL came from query params or file from hero upload
   useEffect(() => {
-    if (initialUrl) handleGenerateYoutube(initialUrl);
+    if (initialUrl) {
+      handleGenerateYoutube(initialUrl);
+    } else if (searchParams.get("mode") === "upload") {
+      const file = (window as any).__clipmaster_upload as File | undefined;
+      if (file) {
+        delete (window as any).__clipmaster_upload;
+        handleFileSelect(file);
+        setMode("upload");
+      }
+    }
   }, []);
 
   // Cleanup object URL

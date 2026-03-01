@@ -1,19 +1,29 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Upload } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import heroBg from "@/assets/hero-bg.jpg";
 
 const Hero = () => {
   const [url, setUrl] = useState("");
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (url.trim()) {
       navigate(`/app?url=${encodeURIComponent(url)}`);
     }
+  };
+
+  const handleFileSelect = (file: File) => {
+    const validTypes = ["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"];
+    if (!validTypes.includes(file.type)) return;
+    // Store file in sessionStorage-like approach: navigate to app and let it handle
+    // We use a global to pass the file since it can't go through URL
+    (window as any).__clipmaster_upload = file;
+    navigate("/app?mode=upload");
   };
 
   return (
@@ -58,7 +68,34 @@ const Hero = () => {
           </Button>
         </form>
 
-        <p className="text-xs text-muted-foreground mt-4">
+        {/* Upload file option */}
+        <div className="flex items-center gap-3 max-w-xl mx-auto mt-4">
+          <div className="flex-1 h-px bg-border/40" />
+          <span className="text-xs text-muted-foreground">ou</span>
+          <div className="flex-1 h-px bg-border/40" />
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="video/mp4,video/webm,video/quicktime,video/x-matroska"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) handleFileSelect(f);
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-3 gap-2 text-muted-foreground hover:text-foreground"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <Upload className="w-4 h-4" />
+          Upload de arquivo do vídeo
+        </Button>
+
+        <p className="text-xs text-muted-foreground mt-3">
           Grátis para testar · Sem cartão de crédito
         </p>
       </div>
