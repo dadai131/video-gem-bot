@@ -503,6 +503,10 @@ const AppPage = () => {
     setTrimEnd(0);
     setVideoDuration(0);
     setMainTab("analyze");
+    setUrl("");
+    setProgress(0);
+    setStatusText("");
+    setMode("youtube");
     if (localVideoUrl) {
       URL.revokeObjectURL(localVideoUrl);
       setLocalVideoUrl(null);
@@ -686,6 +690,15 @@ const AppPage = () => {
                 100% local — nenhum dado é enviado para servidores
               </p>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-6 gap-2 text-muted-foreground hover:text-destructive"
+              onClick={resetAll}
+            >
+              <RefreshCw className="w-4 h-4" />
+              Descartar e começar de novo
+            </Button>
           </div>
         </div>
       </div>
