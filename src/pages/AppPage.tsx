@@ -682,6 +682,32 @@ const AppPage = () => {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {!uploadedFile && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="video/mp4,video/webm,video/quicktime,video/x-matroska"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) {
+                      handleFileSelect(f);
+                      setMode("upload");
+                    }
+                  }}
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="w-4 h-4" />
+                  Upload de arquivo
+                </Button>
+              </>
+            )}
             {hasVideo && (
               <ExportDialog
                 file={uploadedFile}
