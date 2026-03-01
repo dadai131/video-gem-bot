@@ -81,7 +81,11 @@ const AppPage = () => {
 
       clearInterval(progressInterval);
 
-      if (error) throw new Error(error.message || "Erro ao analisar vídeo");
+      if (error) {
+        // Try to get the actual error message from the response body
+        if (data?.error) throw new Error(data.error);
+        throw new Error(error.message || "Erro ao analisar vídeo");
+      }
       if (data?.error) throw new Error(data.error);
 
       setProgress(95);
