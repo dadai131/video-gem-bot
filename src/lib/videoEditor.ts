@@ -1,35 +1,7 @@
-import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { toBlobURL, fetchFile } from "@ffmpeg/util";
+import { fetchFile } from "@ffmpeg/util";
+import { getSharedFFmpeg, type ProgressCallback } from "./ffmpegSingleton";
 
-let ffmpegInstance: FFmpeg | null = null;
-let ffmpegLoaded = false;
-
-export type EditorProgressCallback = (percent: number, status: string) => void;
-
-async function getFFmpeg(onProgress?: EditorProgressCallback): Promise<FFmpeg> {
-  if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
-
-  const ffmpeg = new FFmpeg();
-
-  ffmpeg.on("log", ({ message }) => {
-    console.log("[FFmpeg Editor]", message);
-  });
-
-  ffmpeg.on("progress", ({ progress }) => {
-    onProgress?.(Math.round(progress * 100), "Processando...");
-  });
-
-  const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
-
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-  });
-
-  ffmpegInstance = ffmpeg;
-  ffmpegLoaded = true;
-  return ffmpeg;
-}
+export type EditorProgressCallback = ProgressCallback;
 
 export async function trimVideo(
   file: File,
@@ -38,7 +10,7 @@ export async function trimVideo(
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
   onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getFFmpeg(onProgress);
+  const ffmpeg = await getSharedFFmpeg(onProgress);
 
   onProgress(15, "Preparando vídeo...");
   const inputName = "trim_input.mp4";
@@ -48,6 +20,10 @@ export async function trimVideo(
 
   onProgress(30, "Cortando vídeo...");
   const duration = endSeconds - startSeconds;
+
+  ffmpeg.on("progress", ({ progress }) => {
+    onProgress(30 + Math.round(progress * 55), "Cortando vídeo...");
+  });
 
   await ffmpeg.exec([
     "-i", inputName,
@@ -74,12 +50,11 @@ export async function splitVideo(
   onProgress: EditorProgressCallback
 ): Promise<Blob[]> {
   onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getFFmpeg(onProgress);
+  const ffmpeg = await getSharedFFmpeg(onProgress);
 
   const inputName = "split_input.mp4";
   await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-  // Get duration via metadata
   const video = document.createElement("video");
   video.src = URL.createObjectURL(file);
   await new Promise<void>((r) => { video.onloadedmetadata = () => r(); });
@@ -122,19 +97,17 @@ export async function removeSegments(
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
   onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getFFmpeg(onProgress);
+  const ffmpeg = await getSharedFFmpeg(onProgress);
 
   const inputName = "remove_input.mp4";
   await ffmpeg.writeFile(inputName, await fetchFile(file));
 
-  // Get total duration
   const video = document.createElement("video");
   video.src = URL.createObjectURL(file);
   await new Promise<void>((r) => { video.onloadedmetadata = () => r(); });
   const totalDuration = video.duration;
   URL.revokeObjectURL(video.src);
 
-  // Sort segments and compute keep segments
   const sorted = [...segmentsToRemove].sort((a, b) => a.start - b.start);
   const keepSegments: { start: number; end: number }[] = [];
   let cursor = 0;
@@ -153,7 +126,6 @@ export async function removeSegments(
     throw new Error("Não há conteúdo restante após remover os trechos.");
   }
 
-  // Cut each keep segment
   const partFiles: string[] = [];
   for (let i = 0; i < keepSegments.length; i++) {
     const seg = keepSegments[i];
@@ -173,7 +145,6 @@ export async function removeSegments(
     ]);
   }
 
-  // Create concat list
   onProgress(80, "Concatenando...");
   const concatContent = partFiles.map((f) => `file '${f}'`).join("\n");
   await ffmpeg.writeFile("concat.txt", new TextEncoder().encode(concatContent));
@@ -189,7 +160,6 @@ export async function removeSegments(
 
   const data = await ffmpeg.readFile(finalOut) as Uint8Array;
 
-  // Cleanup
   for (const f of partFiles) await ffmpeg.deleteFile(f);
   await ffmpeg.deleteFile(inputName);
   await ffmpeg.deleteFile("concat.txt");
@@ -204,7 +174,7 @@ export async function extractAudioWav(
   onProgress: EditorProgressCallback
 ): Promise<Blob> {
   onProgress(5, "Carregando motor de edição...");
-  const ffmpeg = await getFFmpeg(onProgress);
+  const ffmpeg = await getSharedFFmpeg(onProgress);
 
   const inputName = "audio_input.mp4";
   const outputName = "audio_output.wav";
@@ -212,6 +182,11 @@ export async function extractAudioWav(
   await ffmpeg.writeFile(inputName, await fetchFile(file));
 
   onProgress(20, "Extraindo áudio...");
+  
+  ffmpeg.on("progress", ({ progress }) => {
+    onProgress(20 + Math.round(progress * 65), "Extraindo áudio...");
+  });
+
   await ffmpeg.exec([
     "-i", inputName,
     "-ar", "16000",
