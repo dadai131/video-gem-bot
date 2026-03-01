@@ -1,24 +1,29 @@
+import type { SubtitleSegment } from "./subtitleUtils";
+
 export type ProgressCallback = (percent: number, status: string) => void;
 
 /**
  * Cut a video clip using MediaRecorder + Canvas (no FFmpeg needed).
  * Records the video playing on a canvas from startSeconds to endSeconds.
+ * Optionally burns subtitles into the clip.
  */
 export async function cutVideoClip(
   file: File,
   startSeconds: number,
   endSeconds: number,
   clipIndex: number,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  subtitles?: SubtitleSegment[]
 ): Promise<Blob> {
   onProgress(5, "Preparando vídeo...");
-  return recordVideoSegment(file, startSeconds, endSeconds, onProgress);
+  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles);
 }
 
 export async function cutAllClips(
   file: File,
   clips: { start_seconds: number; end_seconds: number; title: string }[],
-  onProgress: (clipIndex: number, percent: number, status: string) => void
+  onProgress: (clipIndex: number, percent: number, status: string) => void,
+  subtitles?: SubtitleSegment[]
 ): Promise<{ blob: Blob; title: string }[]> {
   const results: { blob: Blob; title: string }[] = [];
 
@@ -29,7 +34,8 @@ export async function cutAllClips(
       clip.start_seconds,
       clip.end_seconds,
       i,
-      (pct, status) => onProgress(i, pct, status)
+      (pct, status) => onProgress(i, pct, status),
+      subtitles
     );
     results.push({ blob, title: clip.title });
   }
@@ -38,14 +44,57 @@ export async function cutAllClips(
 }
 
 /**
+ * Draw subtitle text on a canvas context (anime/TikTok style).
+ */
+function drawSubtitle(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const fontSize = Math.round(canvasHeight / 14);
+  ctx.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+
+  const upperText = text.toUpperCase();
+  const x = canvasWidth / 2;
+  const y = canvasHeight - canvasHeight / 8;
+
+  // Shadow for depth
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+
+  // Black outline
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = fontSize / 5;
+  ctx.lineJoin = "round";
+  ctx.strokeText(upperText, x, y);
+
+  // Yellow fill
+  ctx.fillStyle = "#FFD400";
+  ctx.fillText(upperText, x, y);
+
+  // Reset shadow
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+}
+
+/**
  * Record a segment of a video using Canvas + MediaRecorder.
  * This approach works in all modern browsers without WASM or special headers.
+ * When subtitles are provided, they are burned into the video.
  */
 async function recordVideoSegment(
   file: File,
   startSeconds: number,
   endSeconds: number,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  subtitles?: SubtitleSegment[]
 ): Promise<Blob> {
   const duration = endSeconds - startSeconds;
 
@@ -127,6 +176,11 @@ async function recordVideoSegment(
 
   onProgress(15, "Cortando vídeo...");
 
+  // Filter subtitles that overlap with this clip's time range
+  const clipSubtitles = subtitles?.filter(
+    (s) => s.end > startSeconds && s.start < endSeconds
+  ) || [];
+
   // Start recording and playing
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = () => {
@@ -151,7 +205,19 @@ async function recordVideoSegment(
         return;
       }
 
+      // Draw video frame
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Draw active subtitle if any
+      if (clipSubtitles.length > 0) {
+        const currentTime = video.currentTime;
+        const activeSeg = clipSubtitles.find(
+          (s) => currentTime >= s.start && currentTime <= s.end
+        );
+        if (activeSeg) {
+          drawSubtitle(ctx, activeSeg.text, canvas.width, canvas.height);
+        }
+      }
 
       // Update progress
       const elapsed = video.currentTime - startSeconds;
