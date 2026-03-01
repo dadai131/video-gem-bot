@@ -62,6 +62,11 @@ const AppPage = () => {
   const [cutProgress, setCutProgress] = useState(0);
   const [cutStatus, setCutStatus] = useState("");
 
+  // YouTube download state
+  const [downloading, setDownloading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState("");
+  const [showYtdlpInstructions, setShowYtdlpInstructions] = useState(false);
+
   // Main tabs
   const [mainTab, setMainTab] = useState<string>("analyze");
 
@@ -306,6 +311,67 @@ const AppPage = () => {
       });
     } finally {
       setCuttingAll(false);
+    }
+  };
+
+  const handleDownloadYoutube = async () => {
+    if (!videoId || downloading) return;
+
+    setDownloading(true);
+    setDownloadStatus("Buscando link de download...");
+    setShowYtdlpInstructions(false);
+
+    try {
+      const response = await supabase.functions.invoke("download-youtube", {
+        body: { videoId },
+      });
+
+      const data = response.data;
+      if (data?.error || response.error) {
+        if (data?.fallback) {
+          setShowYtdlpInstructions(true);
+          toast({
+            title: "Download automático indisponível",
+            description: "Use o yt-dlp no seu PC para baixar o vídeo (instruções abaixo).",
+            variant: "destructive",
+          });
+          return;
+        }
+        throw new Error(data?.error || response.error?.message || "Erro desconhecido");
+      }
+
+      setDownloadStatus("Baixando vídeo...");
+
+      const videoUrl = data.type === "progressive" ? data.url : data.videoUrl;
+      if (!videoUrl) throw new Error("URL de download não encontrada");
+
+      const videoRes = await fetch(videoUrl);
+      if (!videoRes.ok) throw new Error("Falha ao baixar o vídeo do YouTube");
+
+      const blob = await videoRes.blob();
+      const file = new File([blob], `youtube_${videoId}.mp4`, { type: "video/mp4" });
+
+      setUploadedFile(file);
+      const objUrl = URL.createObjectURL(file);
+      if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
+      setLocalVideoUrl(objUrl);
+      setMode("upload");
+
+      toast({
+        title: "Vídeo baixado!",
+        description: "Agora você pode usar as abas Editar e Legendar com Whisper.",
+      });
+    } catch (e: any) {
+      console.error("Download YouTube error:", e);
+      setShowYtdlpInstructions(true);
+      toast({
+        title: "Erro no download",
+        description: e.message || "Não foi possível baixar o vídeo.",
+        variant: "destructive",
+      });
+    } finally {
+      setDownloading(false);
+      setDownloadStatus("");
     }
   };
 
@@ -812,6 +878,57 @@ const AppPage = () => {
                     ))}
                   </div>
                 </div>
+
+                {/* Download YouTube video button */}
+                {mode === "youtube" && videoId && !uploadedFile && (
+                  <div className="mt-6 glass rounded-xl p-5 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                        <Download className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <h3 className="font-display text-sm font-semibold">Baixar vídeo para editar</h3>
+                        <p className="text-xs text-muted-foreground">
+                          Baixe o vídeo para usar as abas Editar e Legendar com Whisper
+                        </p>
+                      </div>
+                    </div>
+
+                    <Button
+                      onClick={handleDownloadYoutube}
+                      disabled={downloading}
+                      className="w-full gap-2 glow-primary"
+                    >
+                      {downloading ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Download className="w-4 h-4" />
+                      )}
+                      {downloading ? downloadStatus : "Baixar vídeo do YouTube"}
+                    </Button>
+
+                    {showYtdlpInstructions && (
+                      <div className="rounded-lg bg-secondary/50 p-4 space-y-2">
+                        <p className="text-sm font-semibold text-foreground">
+                          📥 Alternativa: baixe com yt-dlp no seu PC
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          O download automático não está disponível para este vídeo (proteção do YouTube).
+                          Use o <strong>yt-dlp</strong> no seu computador:
+                        </p>
+                        <div className="rounded bg-background/80 p-3 font-mono text-xs space-y-1">
+                          <p className="text-muted-foreground"># Instalar (precisa de Python):</p>
+                          <p className="text-foreground">pip install yt-dlp</p>
+                          <p className="text-muted-foreground mt-2"># Baixar vídeo MP4:</p>
+                          <p className="text-foreground">yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]" --merge-output-format mp4 "https://youtube.com/watch?v={videoId}"</p>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Depois, faça upload do arquivo .mp4 aqui para editar e legendar.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </TabsContent>
