@@ -239,9 +239,9 @@ async function recordVideoSegment(
 
   // Create video element
   const video = document.createElement("video");
-  video.muted = false;
   video.playsInline = true;
   video.preload = "auto";
+  video.crossOrigin = "anonymous";
 
   const videoUrl = URL.createObjectURL(file);
   video.src = videoUrl;
@@ -263,14 +263,21 @@ async function recordVideoSegment(
   // Create media stream from canvas
   const canvasStream = canvas.captureStream(30);
 
-  // Try to capture audio from the video element
+  // Capture audio: create AudioContext BEFORE playing, route to destination stream
+  // Do NOT mute the video element — instead, disconnect from speakers
   let combinedStream: MediaStream;
+  let audioCtx: AudioContext | null = null;
   try {
-    const audioCtx = new AudioContext();
+    audioCtx = new AudioContext();
     const source = audioCtx.createMediaElementSource(video);
     const destination = audioCtx.createMediaStreamDestination();
+    // Route audio to the recording stream only (not speakers)
     source.connect(destination);
-    source.connect(audioCtx.destination);
+    // Create a gain node set to 0 for speakers so user doesn't hear playback
+    const silentGain = audioCtx.createGain();
+    silentGain.gain.value = 0;
+    source.connect(silentGain);
+    silentGain.connect(audioCtx.destination);
 
     const audioTrack = destination.stream.getAudioTracks()[0];
     if (audioTrack) {
@@ -284,9 +291,6 @@ async function recordVideoSegment(
   } catch {
     combinedStream = canvasStream;
   }
-
-  // Mute the video element so user doesn't hear playback
-  video.muted = true;
 
   // Set up MediaRecorder
   const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
