@@ -167,27 +167,10 @@ const AppPage = () => {
       setClips(data.clips || []);
       setActiveClip(0);
 
-      // Parse YouTube transcript into subtitle segments
+      // Store transcript for reference but don't parse into subtitles
+      // YouTube mode only shows scene suggestions
       if (data.transcript) {
         setYoutubeTranscript(data.transcript);
-        const lines = data.transcript.split("\n");
-        const segs: SubtitleSegment[] = [];
-        for (let i = 0; i < lines.length; i++) {
-          const match = lines[i].match(/^\[(\d+):(\d+)\]\s*(.+)$/);
-          if (match) {
-            const startSec = parseInt(match[1]) * 60 + parseInt(match[2]);
-            // End = next line's start, or start + 3s
-            let endSec = startSec + 3;
-            if (i + 1 < lines.length) {
-              const nextMatch = lines[i + 1].match(/^\[(\d+):(\d+)\]/);
-              if (nextMatch) {
-                endSec = parseInt(nextMatch[1]) * 60 + parseInt(nextMatch[2]);
-              }
-            }
-            segs.push({ id: segs.length + 1, start: startSec, end: endSec, text: match[3].trim() });
-          }
-        }
-        if (segs.length > 0) setSubtitles(segs);
       }
 
       await new Promise((r) => setTimeout(r, 500));
@@ -813,7 +796,7 @@ const AppPage = () => {
                 Editar
               </TabsTrigger>
             )}
-            {(hasVideo || hasYoutubeResults) && (
+            {hasVideo && (
               <TabsTrigger value="subtitles" className="gap-2">
                 <Type className="w-3.5 h-3.5" />
                 Legendar
@@ -1093,14 +1076,6 @@ const AppPage = () => {
                         controls
                         className="w-full h-full bg-background"
                       />
-                    ) : hasYoutubeResults && videoId ? (
-                      <iframe
-                        ref={playerRef}
-                        src={`https://www.youtube.com/embed/${videoId}?rel=0`}
-                        className="w-full h-full"
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
                     ) : null}
                   </div>
                 </div>
@@ -1136,24 +1111,6 @@ const AppPage = () => {
                   </div>
                 )}
 
-                {/* YouTube info */}
-                {!hasVideo && hasYoutubeResults && subtitles.length > 0 && (
-                  <div className="glass rounded-xl p-4">
-                    <p className="text-sm text-muted-foreground">
-                      ✅ Legendas extraídas automaticamente do YouTube ({subtitles.length} segmentos).
-                      Edite o texto ao lado e faça download do arquivo .srt.
-                    </p>
-                  </div>
-                )}
-
-                {!hasVideo && hasYoutubeResults && subtitles.length === 0 && (
-                  <div className="glass rounded-xl p-4">
-                    <p className="text-sm text-muted-foreground">
-                      ⚠️ Esse vídeo não possui legendas disponíveis no YouTube.
-                      Para gerar legendas automáticas com Whisper, faça upload do arquivo de vídeo.
-                    </p>
-                  </div>
-                )}
               </div>
 
               {/* Subtitle editor */}
