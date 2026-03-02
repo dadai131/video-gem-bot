@@ -229,7 +229,7 @@ function findBestClips(scores: FrameScore[], duration: number): Clip[] {
 
   return topClusters.map((cluster, i) => {
     const centerTime = cluster.times[Math.floor(cluster.times.length / 2)];
-    const clipDuration = Math.min(30, Math.max(15, cluster.times.length * 2));
+    const clipDuration = Math.min(90, Math.max(15, cluster.times.length * 3));
     const start = Math.max(0, centerTime - clipDuration / 2);
     const end = Math.min(duration, start + clipDuration);
     const scorePercent = Math.round(cluster.maxScore * 100);
