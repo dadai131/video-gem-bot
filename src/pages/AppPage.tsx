@@ -82,6 +82,9 @@ const AppPage = () => {
   const [transcribing, setTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState(0);
   const [transcribeStatus, setTranscribeStatus] = useState("");
+
+  // Alto Edit mode
+  const [autoEdit, setAutoEdit] = useState(false);
   const whisperWorkerRef = useRef<Worker | null>(null);
 
   const playerRef = useRef<HTMLIFrameElement>(null);
@@ -253,7 +256,8 @@ const AppPage = () => {
           setCutProgress(pct);
           setCutStatus(status);
         },
-        subtitles.length > 0 ? subtitles : undefined
+        subtitles.length > 0 ? subtitles : undefined,
+        autoEdit
       );
 
       const safeName = clip.title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
@@ -287,7 +291,8 @@ const AppPage = () => {
           setCutProgress(overallPct);
           setCutStatus(`Cortando clip ${clipIdx + 1}/${clips.length}...`);
         },
-        subtitles.length > 0 ? subtitles : undefined
+        subtitles.length > 0 ? subtitles : undefined,
+        autoEdit
       );
 
       for (const { blob, title } of results) {
@@ -829,20 +834,31 @@ const AppPage = () => {
                     Melhores <span className="text-gradient">momentos</span>
                   </h2>
                   {mode === "upload" && uploadedFile && (
-                    <Button
-                      variant="default"
-                      size="sm"
-                      className="gap-2 glow-primary"
-                      onClick={handleCutAll}
-                      disabled={isCutting}
-                    >
-                      {cuttingAll ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Download className="w-4 h-4" />
-                      )}
-                      Exportar todos
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant={autoEdit ? "default" : "outline"}
+                        size="sm"
+                        className={`gap-2 ${autoEdit ? "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0 shadow-lg shadow-amber-500/25" : ""}`}
+                        onClick={() => setAutoEdit(!autoEdit)}
+                      >
+                        <Flame className="w-4 h-4" />
+                        Alto Edit
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className="gap-2 glow-primary"
+                        onClick={handleCutAll}
+                        disabled={isCutting}
+                      >
+                        {cuttingAll ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Download className="w-4 h-4" />
+                        )}
+                        Exportar todos
+                      </Button>
+                    </div>
                   )}
                 </div>
 

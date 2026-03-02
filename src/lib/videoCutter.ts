@@ -13,17 +13,19 @@ export async function cutVideoClip(
   endSeconds: number,
   clipIndex: number,
   onProgress: ProgressCallback,
-  subtitles?: SubtitleSegment[]
+  subtitles?: SubtitleSegment[],
+  autoEdit?: boolean
 ): Promise<Blob> {
   onProgress(5, "Preparando vídeo...");
-  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles);
+  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit);
 }
 
 export async function cutAllClips(
   file: File,
   clips: { start_seconds: number; end_seconds: number; title: string }[],
   onProgress: (clipIndex: number, percent: number, status: string) => void,
-  subtitles?: SubtitleSegment[]
+  subtitles?: SubtitleSegment[],
+  autoEdit?: boolean
 ): Promise<{ blob: Blob; title: string }[]> {
   const results: { blob: Blob; title: string }[] = [];
 
@@ -35,7 +37,8 @@ export async function cutAllClips(
       clip.end_seconds,
       i,
       (pct, status) => onProgress(i, pct, status),
-      subtitles
+      subtitles,
+      autoEdit
     );
     results.push({ blob, title: clip.title });
   }
@@ -221,6 +224,50 @@ function applyColorGrade(
   ctx.globalCompositeOperation = "source-over";
 }
 
+/**
+ * Alto Edit: premium color grading with soft glow, enhanced sharpness,
+ * warm cinematic tones, and subtle bloom effect for a "4K film" look.
+ */
+function applyAltoEdit(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  // 1. Soft warm tint (golden hour feel)
+  ctx.globalCompositeOperation = "overlay";
+  ctx.fillStyle = "rgba(255, 180, 80, 0.10)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 2. Subtle teal in shadows (teal & orange look)
+  ctx.globalCompositeOperation = "color";
+  ctx.fillStyle = "rgba(0, 120, 130, 0.03)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 3. Soft contrast boost
+  ctx.globalCompositeOperation = "soft-light";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.12)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 4. Highlights lift (soft glow / bloom)
+  ctx.globalCompositeOperation = "screen";
+  ctx.fillStyle = "rgba(255, 255, 240, 0.04)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 5. Extra brightness in midtones
+  ctx.globalCompositeOperation = "overlay";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.04)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // 6. Apply CSS filter for sharpness and saturation boost
+  ctx.globalCompositeOperation = "source-over";
+  ctx.filter = "contrast(1.06) saturate(1.12) brightness(1.03)";
+  ctx.drawImage(canvas, 0, 0);
+  ctx.filter = "none";
+
+  ctx.globalCompositeOperation = "source-over";
+}
+
 // ============ RECORDING ENGINE ============
 
 /**
@@ -233,7 +280,8 @@ async function recordVideoSegment(
   startSeconds: number,
   endSeconds: number,
   onProgress: ProgressCallback,
-  subtitles?: SubtitleSegment[]
+  subtitles?: SubtitleSegment[],
+  autoEdit?: boolean
 ): Promise<Blob> {
   const duration = endSeconds - startSeconds;
 
@@ -301,7 +349,7 @@ async function recordVideoSegment(
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: 5_000_000,
+    videoBitsPerSecond: autoEdit ? 10_000_000 : 5_000_000,
   });
 
   const chunks: Blob[] = [];
@@ -352,10 +400,14 @@ async function recordVideoSegment(
       // 1. Draw video with Ken Burns zoom
       applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
 
-      // 2. Apply cinematic color grade
-      applyColorGrade(ctx, canvas.width, canvas.height);
+      // 2. Apply color grade (Alto Edit or standard)
+      if (autoEdit) {
+        applyAltoEdit(ctx, canvas, canvas.width, canvas.height);
+      } else {
+        applyColorGrade(ctx, canvas.width, canvas.height);
+      }
 
-      // 3. Apply vignette
+      // 3. Apply vignette (stronger for Alto Edit)
       applyVignette(ctx, canvas.width, canvas.height);
 
       // 4. Draw active subtitle with word highlight
