@@ -21,8 +21,94 @@ function parseSRT(srt: string): { start: number; end: number; text: string }[] {
 }
 
 /**
+ * Draw subtitle with word-by-word highlight (matching videoCutter style).
+ */
+function drawSubtitleOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  canvasWidth: number,
+  canvasHeight: number,
+  segStart: number,
+  segEnd: number,
+  currentTime: number
+) {
+  const fontSize = Math.round(canvasHeight / 14);
+  ctx.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+
+  const upperText = text.toUpperCase();
+  const words = upperText.split(/\s+/);
+  const x = canvasWidth / 2;
+  const y = canvasHeight - canvasHeight / 8;
+
+  const segDuration = segEnd - segStart;
+  const segProgress = Math.max(0, Math.min(1, (currentTime - segStart) / segDuration));
+  const activeWordIndex = Math.floor(segProgress * words.length);
+
+  ctx.shadowColor = "rgba(0,0,0,0.8)";
+  ctx.shadowBlur = 8;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 2;
+
+  if (words.length <= 1) {
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = fontSize / 5;
+    ctx.lineJoin = "round";
+    ctx.strokeText(upperText, x, y);
+    ctx.fillStyle = "#FFD400";
+    ctx.fillText(upperText, x, y);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    return;
+  }
+
+  const fullWidth = ctx.measureText(words.join(" ")).width;
+  let startX = x - fullWidth / 2;
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const wordWidth = ctx.measureText(word).width;
+    const spaceWidth = ctx.measureText(" ").width;
+    const wordX = startX + wordWidth / 2;
+
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = fontSize / 5;
+    ctx.lineJoin = "round";
+    ctx.textAlign = "center";
+    ctx.strokeText(word, wordX, y);
+
+    ctx.fillStyle = i <= activeWordIndex ? "#FFD400" : "rgba(255, 255, 255, 0.85)";
+    ctx.fillText(word, wordX, y);
+
+    startX += wordWidth + spaceWidth;
+  }
+
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+}
+
+/**
+ * Apply vignette effect.
+ */
+function applyVignette(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const cx = w / 2;
+  const cy = h / 2;
+  const radius = Math.max(cx, cy) * 1.2;
+  const gradient = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius);
+  gradient.addColorStop(0, "rgba(0,0,0,0)");
+  gradient.addColorStop(1, "rgba(0,0,0,0.35)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, w, h);
+}
+
+/**
  * Export video with burned-in subtitles using Canvas + MediaRecorder.
- * Draws subtitle text directly on the canvas while recording.
+ * Includes visual effects: vignette, color grade, word-by-word subtitle highlight.
  */
 export async function exportWithBurnedSubtitles(
   file: File,
@@ -56,7 +142,6 @@ export async function exportWithBurnedSubtitles(
 
   const canvasStream = canvas.captureStream(30);
 
-  // Try to capture audio
   let combinedStream: MediaStream;
   try {
     const audioCtx = new AudioContext();
@@ -89,7 +174,7 @@ export async function exportWithBurnedSubtitles(
     if (e.data.size > 0) chunks.push(e.data);
   };
 
-  onProgress(10, "Renderizando vídeo com legendas...");
+  onProgress(10, "Renderizando vídeo com legendas e efeitos...");
 
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = () => {
@@ -118,29 +203,32 @@ export async function exportWithBurnedSubtitles(
       // Draw video frame
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-      // Draw active subtitles
+      // Color grade
+      ctx.globalCompositeOperation = "overlay";
+      ctx.fillStyle = "rgba(255, 200, 100, 0.06)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "soft-light";
+      ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.globalCompositeOperation = "source-over";
+
+      // Vignette
+      applyVignette(ctx, canvas.width, canvas.height);
+
+      // Draw active subtitles with word highlight
       const activeSeg = segments.find(
         (s) => currentTime >= s.start && currentTime <= s.end
       );
       if (activeSeg) {
-        const fontSize = Math.round(canvas.height / 15);
-        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-
-        const text = activeSeg.text.toUpperCase();
-        const x = canvas.width / 2;
-        const y = canvas.height - canvas.height / 8;
-
-        // Black outline
-        ctx.strokeStyle = "black";
-        ctx.lineWidth = fontSize / 6;
-        ctx.lineJoin = "round";
-        ctx.strokeText(text, x, y);
-
-        // Yellow fill
-        ctx.fillStyle = "#FFD400";
-        ctx.fillText(text, x, y);
+        drawSubtitleOnCanvas(
+          ctx,
+          activeSeg.text,
+          canvas.width,
+          canvas.height,
+          activeSeg.start,
+          activeSeg.end,
+          currentTime
+        );
       }
 
       // Progress
@@ -155,7 +243,6 @@ export async function exportWithBurnedSubtitles(
       drawFrame();
     }).catch(reject);
 
-    // Safety timeout
     setTimeout(() => {
       if (recorder.state === "recording") {
         video.pause();
@@ -172,11 +259,9 @@ export async function exportVideoAndSubtitles(
 ): Promise<{ videoBlob: Blob; subtitledBlob: Blob }> {
   onProgress(2, "Preparando exportação dupla...");
 
-  // 1. Clean video (just copy)
   onProgress(5, "Exportando vídeo sem legenda...");
   const videoBlob = new Blob([await file.arrayBuffer()], { type: "video/mp4" });
 
-  // 2. Burned subtitles
   const subtitledBlob = await exportWithBurnedSubtitles(file, srtContent, (p, s) => {
     onProgress(Math.round(10 + p * 0.9), s);
   });

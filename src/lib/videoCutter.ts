@@ -5,7 +5,7 @@ export type ProgressCallback = (percent: number, status: string) => void;
 /**
  * Cut a video clip using MediaRecorder + Canvas (no FFmpeg needed).
  * Records the video playing on a canvas from startSeconds to endSeconds.
- * Optionally burns subtitles into the clip.
+ * Optionally burns subtitles and applies visual effects.
  */
 export async function cutVideoClip(
   file: File,
@@ -43,14 +43,90 @@ export async function cutAllClips(
   return results;
 }
 
+// ============ VISUAL EFFECTS ============
+
 /**
- * Draw subtitle text on a canvas context (anime/TikTok style).
+ * Apply Ken Burns (slow zoom) effect.
+ * Zooms from 1.0x to ~1.08x over the clip duration.
+ */
+function applyKenBurns(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  canvasWidth: number,
+  canvasHeight: number,
+  progress: number // 0..1
+) {
+  const zoom = 1 + progress * 0.08; // zoom from 1.0 to 1.08
+  const dx = (canvasWidth * (zoom - 1)) / 2;
+  const dy = (canvasHeight * (zoom - 1)) / 2;
+
+  ctx.drawImage(
+    video,
+    -dx, -dy,
+    canvasWidth * zoom,
+    canvasHeight * zoom
+  );
+}
+
+/**
+ * Apply fade in/out effect with black overlay.
+ */
+function applyFade(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number,
+  progress: number, // 0..1 overall progress
+  duration: number
+) {
+  const fadeTime = Math.min(0.6, duration * 0.08); // fade duration in seconds (max 0.6s)
+  const fadeDuration = fadeTime / duration; // as ratio
+
+  let alpha = 0;
+  if (progress < fadeDuration) {
+    // Fade in
+    alpha = 1 - progress / fadeDuration;
+  } else if (progress > 1 - fadeDuration) {
+    // Fade out
+    alpha = (progress - (1 - fadeDuration)) / fadeDuration;
+  }
+
+  if (alpha > 0.01) {
+    ctx.fillStyle = `rgba(0, 0, 0, ${Math.min(alpha, 1)})`;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+  }
+}
+
+/**
+ * Apply a subtle vignette effect (darker edges).
+ */
+function applyVignette(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  const cx = canvasWidth / 2;
+  const cy = canvasHeight / 2;
+  const radius = Math.max(cx, cy) * 1.2;
+
+  const gradient = ctx.createRadialGradient(cx, cy, radius * 0.5, cx, cy, radius);
+  gradient.addColorStop(0, "rgba(0,0,0,0)");
+  gradient.addColorStop(1, "rgba(0,0,0,0.35)");
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+}
+
+/**
+ * Draw subtitle text with word-by-word highlight effect (TikTok/anime style).
  */
 function drawSubtitle(
   ctx: CanvasRenderingContext2D,
   text: string,
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  segStart: number,
+  segEnd: number,
+  currentTime: number
 ) {
   const fontSize = Math.round(canvasHeight / 14);
   ctx.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
@@ -58,8 +134,14 @@ function drawSubtitle(
   ctx.textBaseline = "bottom";
 
   const upperText = text.toUpperCase();
+  const words = upperText.split(/\s+/);
   const x = canvasWidth / 2;
   const y = canvasHeight - canvasHeight / 8;
+
+  // Calculate which word is "active" based on time progress through the segment
+  const segDuration = segEnd - segStart;
+  const segProgress = Math.max(0, Math.min(1, (currentTime - segStart) / segDuration));
+  const activeWordIndex = Math.floor(segProgress * words.length);
 
   // Shadow for depth
   ctx.shadowColor = "rgba(0,0,0,0.8)";
@@ -67,15 +149,48 @@ function drawSubtitle(
   ctx.shadowOffsetX = 2;
   ctx.shadowOffsetY = 2;
 
-  // Black outline
-  ctx.strokeStyle = "black";
-  ctx.lineWidth = fontSize / 5;
-  ctx.lineJoin = "round";
-  ctx.strokeText(upperText, x, y);
+  // If single word or short text, render simply
+  if (words.length <= 1) {
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = fontSize / 5;
+    ctx.lineJoin = "round";
+    ctx.strokeText(upperText, x, y);
+    ctx.fillStyle = "#FFD400";
+    ctx.fillText(upperText, x, y);
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    return;
+  }
 
-  // Yellow fill
-  ctx.fillStyle = "#FFD400";
-  ctx.fillText(upperText, x, y);
+  // Measure total width to center properly
+  const fullWidth = ctx.measureText(words.join(" ")).width;
+  let startX = x - fullWidth / 2;
+
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    const wordWidth = ctx.measureText(word).width;
+    const spaceWidth = ctx.measureText(" ").width;
+    const wordX = startX + wordWidth / 2;
+
+    // Black outline for all words
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = fontSize / 5;
+    ctx.lineJoin = "round";
+    ctx.textAlign = "center";
+    ctx.strokeText(word, wordX, y);
+
+    // Active word = bright yellow, others = white with slight transparency
+    if (i <= activeWordIndex) {
+      ctx.fillStyle = "#FFD400";
+    } else {
+      ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    }
+    ctx.fillText(word, wordX, y);
+
+    startX += wordWidth + spaceWidth;
+  }
 
   // Reset shadow
   ctx.shadowColor = "transparent";
@@ -85,9 +200,33 @@ function drawSubtitle(
 }
 
 /**
+ * Apply a subtle cinematic color grade (slight warm tint + contrast boost).
+ */
+function applyColorGrade(
+  ctx: CanvasRenderingContext2D,
+  canvasWidth: number,
+  canvasHeight: number
+) {
+  // Warm overlay
+  ctx.globalCompositeOperation = "overlay";
+  ctx.fillStyle = "rgba(255, 200, 100, 0.06)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // Slight contrast boost
+  ctx.globalCompositeOperation = "soft-light";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+  // Reset
+  ctx.globalCompositeOperation = "source-over";
+}
+
+// ============ RECORDING ENGINE ============
+
+/**
  * Record a segment of a video using Canvas + MediaRecorder.
- * This approach works in all modern browsers without WASM or special headers.
- * When subtitles are provided, they are burned into the video.
+ * Applies visual effects: Ken Burns zoom, fade, vignette, color grade.
+ * Burns subtitles with word-by-word highlight.
  */
 async function recordVideoSegment(
   file: File,
@@ -122,7 +261,7 @@ async function recordVideoSegment(
   const ctx = canvas.getContext("2d")!;
 
   // Create media stream from canvas
-  const canvasStream = canvas.captureStream(30); // 30 fps
+  const canvasStream = canvas.captureStream(30);
 
   // Try to capture audio from the video element
   let combinedStream: MediaStream;
@@ -131,9 +270,8 @@ async function recordVideoSegment(
     const source = audioCtx.createMediaElementSource(video);
     const destination = audioCtx.createMediaStreamDestination();
     source.connect(destination);
-    source.connect(audioCtx.destination); // So we can hear it (muted below)
+    source.connect(audioCtx.destination);
 
-    // Combine video (canvas) + audio tracks
     const audioTrack = destination.stream.getAudioTracks()[0];
     if (audioTrack) {
       combinedStream = new MediaStream([
@@ -144,7 +282,6 @@ async function recordVideoSegment(
       combinedStream = canvasStream;
     }
   } catch {
-    // If audio capture fails, just use video-only
     combinedStream = canvasStream;
   }
 
@@ -160,7 +297,7 @@ async function recordVideoSegment(
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
-    videoBitsPerSecond: 5_000_000, // 5 Mbps
+    videoBitsPerSecond: 5_000_000,
   });
 
   const chunks: Blob[] = [];
@@ -174,7 +311,7 @@ async function recordVideoSegment(
     video.onseeked = () => resolve();
   });
 
-  onProgress(15, "Cortando vídeo...");
+  onProgress(15, "Cortando vídeo com efeitos...");
 
   // Filter subtitles that overlap with this clip's time range
   const clipSubtitles = subtitles?.filter(
@@ -190,12 +327,12 @@ async function recordVideoSegment(
       resolve(blob);
     };
 
-    recorder.onerror = (e) => {
+    recorder.onerror = () => {
       URL.revokeObjectURL(videoUrl);
       reject(new Error("Erro na gravação do vídeo."));
     };
 
-    // Draw frames to canvas
+    // Draw frames to canvas with effects
     let animFrame: number;
     const drawFrame = () => {
       if (video.currentTime >= endSeconds || video.ended) {
@@ -205,29 +342,48 @@ async function recordVideoSegment(
         return;
       }
 
-      // Draw video frame
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const elapsed = video.currentTime - startSeconds;
+      const progress = Math.max(0, Math.min(1, elapsed / duration));
 
-      // Draw active subtitle if any
+      // 1. Draw video with Ken Burns zoom
+      applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
+
+      // 2. Apply cinematic color grade
+      applyColorGrade(ctx, canvas.width, canvas.height);
+
+      // 3. Apply vignette
+      applyVignette(ctx, canvas.width, canvas.height);
+
+      // 4. Draw active subtitle with word highlight
       if (clipSubtitles.length > 0) {
         const currentTime = video.currentTime;
         const activeSeg = clipSubtitles.find(
           (s) => currentTime >= s.start && currentTime <= s.end
         );
         if (activeSeg) {
-          drawSubtitle(ctx, activeSeg.text, canvas.width, canvas.height);
+          drawSubtitle(
+            ctx,
+            activeSeg.text,
+            canvas.width,
+            canvas.height,
+            activeSeg.start,
+            activeSeg.end,
+            currentTime
+          );
         }
       }
 
+      // 5. Apply fade in/out (on top of everything)
+      applyFade(ctx, canvas.width, canvas.height, progress, duration);
+
       // Update progress
-      const elapsed = video.currentTime - startSeconds;
-      const pct = 15 + Math.round((elapsed / duration) * 80);
+      const pct = 15 + Math.round(progress * 80);
       onProgress(Math.min(pct, 95), `Cortando... ${Math.round(elapsed)}s / ${Math.round(duration)}s`);
 
       animFrame = requestAnimationFrame(drawFrame);
     };
 
-    recorder.start(100); // Collect data every 100ms
+    recorder.start(100);
     video.play().then(() => {
       drawFrame();
     }).catch(reject);
@@ -243,7 +399,6 @@ async function recordVideoSegment(
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
-  // Change extension to .webm since we use MediaRecorder
   const webmName = filename.replace(/\.[^.]+$/, ".webm");
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
