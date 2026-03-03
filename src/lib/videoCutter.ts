@@ -1,6 +1,39 @@
 import type { SubtitleSegment } from "./subtitleUtils";
+import { getSharedFFmpeg } from "./ffmpegSingleton";
+import { fetchFile } from "@ffmpeg/util";
 
 export type ProgressCallback = (percent: number, status: string) => void;
+
+/**
+ * Convert a WebM blob to MP4 using FFmpeg WASM.
+ */
+async function convertToMp4(webmBlob: Blob, onProgress: ProgressCallback): Promise<Blob> {
+  onProgress(96, "Convertendo para MP4...");
+  const ffmpeg = await getSharedFFmpeg(onProgress);
+
+  const inputData = await fetchFile(webmBlob);
+  await ffmpeg.writeFile("input.webm", inputData);
+
+  onProgress(97, "Convertendo para MP4...");
+  await ffmpeg.exec([
+    "-i", "input.webm",
+    "-c:v", "libx264",
+    "-preset", "fast",
+    "-crf", "23",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-movflags", "+faststart",
+    "output.mp4"
+  ]);
+
+  onProgress(99, "Finalizando MP4...");
+  const outputData = await ffmpeg.readFile("output.mp4");
+  await ffmpeg.deleteFile("input.webm");
+  await ffmpeg.deleteFile("output.mp4");
+
+  const buffer = outputData instanceof Uint8Array ? outputData.buffer : outputData;
+  return new Blob([buffer as BlobPart], { type: "video/mp4" });
+}
 
 /**
  * Cut a video clip using MediaRecorder + Canvas (no FFmpeg needed).
@@ -372,11 +405,18 @@ async function recordVideoSegment(
 
   // Start recording and playing
   return new Promise<Blob>((resolve, reject) => {
-    recorder.onstop = () => {
+    recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
-      const blob = new Blob(chunks, { type: mimeType });
-      onProgress(100, "Pronto!");
-      resolve(blob);
+      const webmBlob = new Blob(chunks, { type: mimeType });
+      try {
+        const mp4Blob = await convertToMp4(webmBlob, onProgress);
+        onProgress(100, "Pronto!");
+        resolve(mp4Blob);
+      } catch (e) {
+        console.warn("MP4 conversion failed, returning WebM:", e);
+        onProgress(100, "Pronto!");
+        resolve(webmBlob);
+      }
     };
 
     recorder.onerror = () => {
@@ -455,11 +495,12 @@ async function recordVideoSegment(
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
-  const webmName = filename.replace(/\.[^.]+$/, ".webm");
+  const ext = blob.type.includes("mp4") ? ".mp4" : ".webm";
+  const name = filename.replace(/\.[^.]+$/, ext);
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = webmName;
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
