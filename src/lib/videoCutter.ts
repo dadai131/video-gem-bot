@@ -15,24 +15,45 @@ async function convertToMp4(webmBlob: Blob, onProgress: ProgressCallback): Promi
   await ffmpeg.writeFile("input.webm", inputData);
 
   onProgress(97, "Convertendo para MP4...");
-  await ffmpeg.exec([
-    "-i", "input.webm",
-    "-c:v", "libx264",
-    "-preset", "fast",
-    "-crf", "23",
-    "-c:a", "aac",
-    "-b:a", "128k",
-    "-movflags", "+faststart",
-    "output.mp4"
-  ]);
+  
+  // Try multiple strategies in order of preference
+  const strategies = [
+    // Strategy 1: Remux video, transcode audio to AAC
+    ["-i", "input.webm", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
+    // Strategy 2: Pure remux (copy both streams)
+    ["-i", "input.webm", "-c", "copy", "-movflags", "+faststart", "output.mp4"],
+    // Strategy 3: Full transcode with mpeg4 (widely available in WASM builds)
+    ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
+  ];
 
-  onProgress(99, "Finalizando MP4...");
-  const outputData = await ffmpeg.readFile("output.mp4");
-  await ffmpeg.deleteFile("input.webm");
-  await ffmpeg.deleteFile("output.mp4");
+  let success = false;
+  for (const args of strategies) {
+    try {
+      // Clean up any previous output
+      try { await ffmpeg.deleteFile("output.mp4"); } catch {}
+      
+      console.log("[FFmpeg] Trying conversion strategy:", args.join(" "));
+      await ffmpeg.exec(args);
+      
+      // Verify output exists and has content
+      const outputData = await ffmpeg.readFile("output.mp4");
+      if (outputData instanceof Uint8Array && outputData.length > 1000) {
+        onProgress(99, "Finalizando MP4...");
+        await ffmpeg.deleteFile("input.webm");
+        await ffmpeg.deleteFile("output.mp4");
+        return new Blob([outputData.buffer as ArrayBuffer], { type: "video/mp4" });
+      }
+      console.warn("[FFmpeg] Output too small, trying next strategy");
+    } catch (e) {
+      console.warn("[FFmpeg] Strategy failed:", e);
+    }
+  }
 
-  const buffer = outputData instanceof Uint8Array ? outputData.buffer : outputData;
-  return new Blob([buffer as BlobPart], { type: "video/mp4" });
+  // Cleanup
+  try { await ffmpeg.deleteFile("input.webm"); } catch {}
+  try { await ffmpeg.deleteFile("output.mp4"); } catch {}
+  
+  throw new Error("All MP4 conversion strategies failed");
 }
 
 /**
