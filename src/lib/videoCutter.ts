@@ -472,8 +472,28 @@ async function recordVideoSegment(
       const elapsed = video.currentTime - startSeconds;
       const progress = Math.max(0, Math.min(1, elapsed / duration));
 
-      // 1. Draw video with Ken Burns zoom
-      applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
+      // Clear canvas (important for 9:16 black bars)
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (format === "9:16") {
+        // Draw video centered in 1080x1920 canvas, maintaining aspect ratio
+        const scale = canvas.width / videoW;
+        const drawW = canvas.width;
+        const drawH = videoH * scale;
+        const drawY = (canvas.height - drawH) / 2;
+
+        // Apply Ken Burns within the video area
+        const zoom = 1 + progress * 0.08;
+        const zoomedW = drawW * zoom;
+        const zoomedH = drawH * zoom;
+        const dx = (drawW - zoomedW) / 2;
+        const dy = drawY + (drawH - zoomedH) / 2;
+        ctx.drawImage(video, dx, dy, zoomedW, zoomedH);
+      } else {
+        // 1. Draw video with Ken Burns zoom
+        applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
+      }
 
       // 2. Apply color grade (Alto Edit or standard)
       if (autoEdit) {
