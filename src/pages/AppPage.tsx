@@ -83,8 +83,9 @@ const AppPage = () => {
   const [transcribeProgress, setTranscribeProgress] = useState(0);
   const [transcribeStatus, setTranscribeStatus] = useState("");
 
-  // Alto Edit mode
+  // Alto Edit mode & format
   const [autoEdit, setAutoEdit] = useState(false);
+  const [videoFormat, setVideoFormat] = useState<VideoFormat>("original");
   const whisperWorkerRef = useRef<Worker | null>(null);
 
   const playerRef = useRef<HTMLIFrameElement>(null);
