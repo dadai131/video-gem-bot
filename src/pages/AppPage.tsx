@@ -31,6 +31,7 @@ import {
   Search,
   Mic,
   Bell,
+  Smartphone,
 } from "lucide-react";
 
 function formatTime(s: number) {
