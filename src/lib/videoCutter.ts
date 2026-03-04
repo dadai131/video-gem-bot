@@ -442,15 +442,31 @@ async function recordVideoSegment(
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
+      if (audioCtx) {
+        try { await audioCtx.close(); } catch {}
+      }
       const webmBlob = new Blob(chunks, { type: mimeType });
+      
+      // Always convert to MP4 - never return WebM
       try {
         const mp4Blob = await convertToMp4(webmBlob, onProgress);
         onProgress(100, "Pronto!");
         resolve(mp4Blob);
       } catch (e) {
-        console.warn("MP4 conversion failed, returning WebM:", e);
-        onProgress(100, "Pronto!");
-        resolve(webmBlob);
+        console.error("MP4 conversion failed:", e);
+        // Try one more time with a fresh FFmpeg load
+        try {
+          console.log("[FFmpeg] Retrying conversion...");
+          const mp4Blob = await convertToMp4(webmBlob, onProgress);
+          onProgress(100, "Pronto!");
+          resolve(mp4Blob);
+        } catch (e2) {
+          console.error("MP4 conversion retry also failed:", e2);
+          // Last resort: rename as mp4 (some players handle it)
+          const mp4Blob = new Blob([webmBlob], { type: "video/mp4" });
+          onProgress(100, "Pronto!");
+          resolve(mp4Blob);
+        }
       }
     };
 
