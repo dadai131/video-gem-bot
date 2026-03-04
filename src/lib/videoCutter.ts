@@ -81,7 +81,8 @@ export async function cutAllClips(
   clips: { start_seconds: number; end_seconds: number; title: string }[],
   onProgress: (clipIndex: number, percent: number, status: string) => void,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<{ blob: Blob; title: string }[]> {
   const results: { blob: Blob; title: string }[] = [];
 
@@ -94,7 +95,8 @@ export async function cutAllClips(
       i,
       (pct, status) => onProgress(i, pct, status),
       subtitles,
-      autoEdit
+      autoEdit,
+      format
     );
     results.push({ blob, title: clip.title });
   }
