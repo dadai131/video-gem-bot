@@ -339,7 +339,8 @@ async function recordVideoSegment(
   endSeconds: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<Blob> {
   const duration = endSeconds - startSeconds;
 
@@ -360,10 +361,19 @@ async function recordVideoSegment(
 
   onProgress(10, "Preparando gravação...");
 
-  // Set up canvas with video dimensions
+  // Set up canvas dimensions based on format
   const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth || 1280;
-  canvas.height = video.videoHeight || 720;
+  const videoW = video.videoWidth || 1280;
+  const videoH = video.videoHeight || 720;
+
+  if (format === "9:16") {
+    // 9:16 vertical: 1080x1920, video centered with black bars
+    canvas.width = 1080;
+    canvas.height = 1920;
+  } else {
+    canvas.width = videoW;
+    canvas.height = videoH;
+  }
   const ctx = canvas.getContext("2d")!;
 
   // Create media stream from canvas
