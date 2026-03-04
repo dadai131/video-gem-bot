@@ -2,6 +2,7 @@ import type { SubtitleSegment } from "./subtitleUtils";
 import { getSharedFFmpeg } from "./ffmpegSingleton";
 import { fetchFile } from "@ffmpeg/util";
 
+export type VideoFormat = "original" | "9:16";
 export type ProgressCallback = (percent: number, status: string) => void;
 
 /**
@@ -68,10 +69,11 @@ export async function cutVideoClip(
   clipIndex: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<Blob> {
   onProgress(5, "Preparando vídeo...");
-  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit);
+  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit, format);
 }
 
 export async function cutAllClips(
@@ -79,7 +81,8 @@ export async function cutAllClips(
   clips: { start_seconds: number; end_seconds: number; title: string }[],
   onProgress: (clipIndex: number, percent: number, status: string) => void,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<{ blob: Blob; title: string }[]> {
   const results: { blob: Blob; title: string }[] = [];
 
@@ -92,7 +95,8 @@ export async function cutAllClips(
       i,
       (pct, status) => onProgress(i, pct, status),
       subtitles,
-      autoEdit
+      autoEdit,
+      format
     );
     results.push({ blob, title: clip.title });
   }
@@ -335,7 +339,8 @@ async function recordVideoSegment(
   endSeconds: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<Blob> {
   const duration = endSeconds - startSeconds;
 
@@ -356,10 +361,19 @@ async function recordVideoSegment(
 
   onProgress(10, "Preparando gravação...");
 
-  // Set up canvas with video dimensions
+  // Set up canvas dimensions based on format
   const canvas = document.createElement("canvas");
-  canvas.width = video.videoWidth || 1280;
-  canvas.height = video.videoHeight || 720;
+  const videoW = video.videoWidth || 1280;
+  const videoH = video.videoHeight || 720;
+
+  if (format === "9:16") {
+    // 9:16 vertical: 1080x1920, video centered with black bars
+    canvas.width = 1080;
+    canvas.height = 1920;
+  } else {
+    canvas.width = videoW;
+    canvas.height = videoH;
+  }
   const ctx = canvas.getContext("2d")!;
 
   // Create media stream from canvas
@@ -458,8 +472,28 @@ async function recordVideoSegment(
       const elapsed = video.currentTime - startSeconds;
       const progress = Math.max(0, Math.min(1, elapsed / duration));
 
-      // 1. Draw video with Ken Burns zoom
-      applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
+      // Clear canvas (important for 9:16 black bars)
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (format === "9:16") {
+        // Draw video centered in 1080x1920 canvas, maintaining aspect ratio
+        const scale = canvas.width / videoW;
+        const drawW = canvas.width;
+        const drawH = videoH * scale;
+        const drawY = (canvas.height - drawH) / 2;
+
+        // Apply Ken Burns within the video area
+        const zoom = 1 + progress * 0.08;
+        const zoomedW = drawW * zoom;
+        const zoomedH = drawH * zoom;
+        const dx = (drawW - zoomedW) / 2;
+        const dy = drawY + (drawH - zoomedH) / 2;
+        ctx.drawImage(video, dx, dy, zoomedW, zoomedH);
+      } else {
+        // 1. Draw video with Ken Burns zoom
+        applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
+      }
 
       // 2. Apply color grade (Alto Edit or standard)
       if (autoEdit) {
