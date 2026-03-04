@@ -2,6 +2,7 @@ import type { SubtitleSegment } from "./subtitleUtils";
 import { getSharedFFmpeg } from "./ffmpegSingleton";
 import { fetchFile } from "@ffmpeg/util";
 
+export type VideoFormat = "original" | "9:16";
 export type ProgressCallback = (percent: number, status: string) => void;
 
 /**
