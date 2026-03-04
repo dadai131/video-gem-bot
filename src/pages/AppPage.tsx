@@ -295,7 +295,8 @@ const AppPage = () => {
           setCutStatus(`Cortando clip ${clipIdx + 1}/${clips.length}...`);
         },
         subtitles.length > 0 ? subtitles : undefined,
-        autoEdit
+        autoEdit,
+        videoFormat
       );
 
       for (const { blob, title } of results) {
