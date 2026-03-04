@@ -23,12 +23,8 @@ async function convertToMp4(webmBlob: Blob, onProgress: ProgressCallback): Promi
     ["-i", "input.webm", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
     // Strategy 2: Pure remux (copy both streams)
     ["-i", "input.webm", "-c", "copy", "-movflags", "+faststart", "output.mp4"],
-    // Strategy 3: Full transcode with mpeg4
+    // Strategy 3: Full transcode with mpeg4 (widely available in WASM builds)
     ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
-    // Strategy 4: Same as 3 without movflags (some WASM builds don't support it)
-    ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "output.mp4"],
-    // Strategy 5: Simplest possible - let FFmpeg decide codecs
-    ["-i", "input.webm", "output.mp4"],
   ];
 
   let success = false;
@@ -446,31 +442,15 @@ async function recordVideoSegment(
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
-      if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
-      }
       const webmBlob = new Blob(chunks, { type: mimeType });
-      
-      // Always convert to MP4 - never return WebM
       try {
         const mp4Blob = await convertToMp4(webmBlob, onProgress);
         onProgress(100, "Pronto!");
         resolve(mp4Blob);
       } catch (e) {
-        console.error("MP4 conversion failed:", e);
-        // Try one more time with a fresh FFmpeg load
-        try {
-          console.log("[FFmpeg] Retrying conversion...");
-          const mp4Blob = await convertToMp4(webmBlob, onProgress);
-          onProgress(100, "Pronto!");
-          resolve(mp4Blob);
-        } catch (e2) {
-          console.error("MP4 conversion retry also failed:", e2);
-          // Last resort: rename as mp4 (some players handle it)
-          const mp4Blob = new Blob([webmBlob], { type: "video/mp4" });
-          onProgress(100, "Pronto!");
-          resolve(mp4Blob);
-        }
+        console.warn("MP4 conversion failed, returning WebM:", e);
+        onProgress(100, "Pronto!");
+        resolve(webmBlob);
       }
     };
 
