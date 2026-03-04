@@ -259,7 +259,8 @@ const AppPage = () => {
           setCutStatus(status);
         },
         subtitles.length > 0 ? subtitles : undefined,
-        autoEdit
+        autoEdit,
+        videoFormat
       );
 
       const safeName = clip.title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
