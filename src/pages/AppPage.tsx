@@ -11,7 +11,7 @@ import ExportDialog from "@/components/ExportDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
-import { cutVideoClip, cutAllClips, downloadBlob } from "@/lib/videoCutter";
+import { cutVideoClip, cutAllClips, downloadBlob, type VideoFormat } from "@/lib/videoCutter";
 import { trimVideo, extractAudioWav } from "@/lib/videoEditor";
 import type { SubtitleSegment } from "@/lib/subtitleUtils";
 import {
