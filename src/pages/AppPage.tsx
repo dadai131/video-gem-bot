@@ -840,6 +840,15 @@ const AppPage = () => {
                   {mode === "upload" && uploadedFile && (
                     <div className="flex items-center gap-2">
                       <Button
+                        variant={videoFormat === "9:16" ? "default" : "outline"}
+                        size="sm"
+                        className={`gap-2 ${videoFormat === "9:16" ? "bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 text-white border-0 shadow-lg shadow-pink-500/25" : ""}`}
+                        onClick={() => setVideoFormat(videoFormat === "9:16" ? "original" : "9:16")}
+                      >
+                        <Smartphone className="w-4 h-4" />
+                        9:16
+                      </Button>
+                      <Button
                         variant={autoEdit ? "default" : "outline"}
                         size="sm"
                         className={`gap-2 ${autoEdit ? "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0 shadow-lg shadow-amber-500/25" : ""}`}
