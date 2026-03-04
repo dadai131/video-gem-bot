@@ -23,8 +23,12 @@ async function convertToMp4(webmBlob: Blob, onProgress: ProgressCallback): Promi
     ["-i", "input.webm", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
     // Strategy 2: Pure remux (copy both streams)
     ["-i", "input.webm", "-c", "copy", "-movflags", "+faststart", "output.mp4"],
-    // Strategy 3: Full transcode with mpeg4 (widely available in WASM builds)
+    // Strategy 3: Full transcode with mpeg4
     ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
+    // Strategy 4: Same as 3 without movflags (some WASM builds don't support it)
+    ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "output.mp4"],
+    // Strategy 5: Simplest possible - let FFmpeg decide codecs
+    ["-i", "input.webm", "output.mp4"],
   ];
 
   let success = false;
