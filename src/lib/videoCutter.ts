@@ -69,10 +69,11 @@ export async function cutVideoClip(
   clipIndex: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean
+  autoEdit?: boolean,
+  format: VideoFormat = "original"
 ): Promise<Blob> {
   onProgress(5, "Preparando vídeo...");
-  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit);
+  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit, format);
 }
 
 export async function cutAllClips(
