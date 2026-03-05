@@ -1,24 +1,7 @@
 export type EditorProgressCallback = (percent: number, status: string) => void;
 
+// Re-use the browser-native recording approach
 import type { ProgressCallback } from "./videoCutter";
-
-/**
- * Pick best MIME for MediaRecorder. Prefer MP4, fallback WebM.
- */
-function pickMimeType(): string {
-  const candidates = [
-    "video/mp4;codecs=avc1,mp4a.40.2",
-    "video/mp4;codecs=avc1",
-    "video/mp4",
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-  ];
-  for (const mime of candidates) {
-    if (MediaRecorder.isTypeSupported(mime)) return mime;
-  }
-  return "video/webm";
-}
 
 export async function trimVideo(
   file: File,
@@ -46,6 +29,7 @@ export async function extractAudioWav(
   const channelData = audioBuffer.getChannelData(0);
   const sampleRate = audioBuffer.sampleRate;
 
+  // Resample to 16000 Hz if needed
   let samples: Float32Array;
   if (sampleRate !== 16000) {
     const ratio = sampleRate / 16000;
@@ -66,6 +50,9 @@ export async function extractAudioWav(
   return new Blob([wavBuffer], { type: "audio/wav" });
 }
 
+/**
+ * Record a segment of video using Canvas + MediaRecorder (no FFmpeg).
+ */
 async function recordSegment(
   file: File,
   startSeconds: number,
@@ -96,16 +83,12 @@ async function recordSegment(
   const canvasStream = canvas.captureStream(30);
 
   let combinedStream: MediaStream;
-  let audioCtx: AudioContext | null = null;
   try {
-    audioCtx = new AudioContext();
+    const audioCtx = new AudioContext();
     const source = audioCtx.createMediaElementSource(video);
     const destination = audioCtx.createMediaStreamDestination();
     source.connect(destination);
-    const silentGain = audioCtx.createGain();
-    silentGain.gain.value = 0;
-    source.connect(silentGain);
-    silentGain.connect(audioCtx.destination);
+    source.connect(audioCtx.destination);
 
     const audioTrack = destination.stream.getAudioTracks()[0];
     combinedStream = audioTrack
@@ -115,7 +98,13 @@ async function recordSegment(
     combinedStream = canvasStream;
   }
 
-  const mimeType = pickMimeType();
+  video.muted = true;
+
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+    ? "video/webm;codecs=vp9,opus"
+    : MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+    ? "video/webm;codecs=vp8,opus"
+    : "video/webm";
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
@@ -135,11 +124,8 @@ async function recordSegment(
   onProgress(15, "Cortando vídeo...");
 
   return new Promise<Blob>((resolve, reject) => {
-    recorder.onstop = async () => {
+    recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
-      if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
-      }
       const blob = new Blob(chunks, { type: mimeType });
       onProgress(100, "Pronto!");
       resolve(blob);

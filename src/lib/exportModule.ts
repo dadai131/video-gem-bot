@@ -1,23 +1,5 @@
 export type ExportProgressCallback = (percent: number, status: string) => void;
 
-/**
- * Pick best MIME for MediaRecorder. Prefer MP4, fallback WebM.
- */
-function pickMimeType(): string {
-  const candidates = [
-    "video/mp4;codecs=avc1,mp4a.40.2",
-    "video/mp4;codecs=avc1",
-    "video/mp4",
-    "video/webm;codecs=vp9,opus",
-    "video/webm;codecs=vp8,opus",
-    "video/webm",
-  ];
-  for (const mime of candidates) {
-    if (MediaRecorder.isTypeSupported(mime)) return mime;
-  }
-  return "video/webm";
-}
-
 function parseSRT(srt: string): { start: number; end: number; text: string }[] {
   const blocks = srt.trim().split(/\n\n+/);
   const result: { start: number; end: number; text: string }[] = [];
@@ -38,6 +20,9 @@ function parseSRT(srt: string): { start: number; end: number; text: string }[] {
   return result;
 }
 
+/**
+ * Draw subtitle with word-by-word highlight (matching videoCutter style).
+ */
 function drawSubtitleOnCanvas(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -107,6 +92,9 @@ function drawSubtitleOnCanvas(
   ctx.shadowOffsetY = 0;
 }
 
+/**
+ * Apply vignette effect.
+ */
 function applyVignette(ctx: CanvasRenderingContext2D, w: number, h: number) {
   const cx = w / 2;
   const cy = h / 2;
@@ -120,7 +108,7 @@ function applyVignette(ctx: CanvasRenderingContext2D, w: number, h: number) {
 
 /**
  * Export video with burned-in subtitles using Canvas + MediaRecorder.
- * Records directly as MP4 when browser supports it, otherwise WebM.
+ * Includes visual effects: vignette, color grade, word-by-word subtitle highlight.
  */
 export async function exportWithBurnedSubtitles(
   file: File,
@@ -155,17 +143,12 @@ export async function exportWithBurnedSubtitles(
   const canvasStream = canvas.captureStream(30);
 
   let combinedStream: MediaStream;
-  let audioCtx: AudioContext | null = null;
   try {
-    audioCtx = new AudioContext();
+    const audioCtx = new AudioContext();
     const source = audioCtx.createMediaElementSource(video);
     const destination = audioCtx.createMediaStreamDestination();
     source.connect(destination);
-    // Silent output to speakers
-    const silentGain = audioCtx.createGain();
-    silentGain.gain.value = 0;
-    source.connect(silentGain);
-    silentGain.connect(audioCtx.destination);
+    source.connect(audioCtx.destination);
 
     const audioTrack = destination.stream.getAudioTracks()[0];
     combinedStream = audioTrack
@@ -175,7 +158,11 @@ export async function exportWithBurnedSubtitles(
     combinedStream = canvasStream;
   }
 
-  const mimeType = pickMimeType();
+  video.muted = true;
+
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+    ? "video/webm;codecs=vp9,opus"
+    : "video/webm";
 
   const recorder = new MediaRecorder(combinedStream, {
     mimeType,
@@ -190,11 +177,8 @@ export async function exportWithBurnedSubtitles(
   onProgress(10, "Renderizando vídeo com legendas e efeitos...");
 
   return new Promise<Blob>((resolve, reject) => {
-    recorder.onstop = async () => {
+    recorder.onstop = () => {
       URL.revokeObjectURL(videoUrl);
-      if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
-      }
       const blob = new Blob(chunks, { type: mimeType });
       onProgress(100, "Exportação concluída!");
       resolve(blob);
@@ -216,6 +200,7 @@ export async function exportWithBurnedSubtitles(
 
       const currentTime = video.currentTime;
 
+      // Draw video frame
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
       // Color grade
@@ -227,15 +212,26 @@ export async function exportWithBurnedSubtitles(
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.globalCompositeOperation = "source-over";
 
+      // Vignette
       applyVignette(ctx, canvas.width, canvas.height);
 
+      // Draw active subtitles with word highlight
       const activeSeg = segments.find(
         (s) => currentTime >= s.start && currentTime <= s.end
       );
       if (activeSeg) {
-        drawSubtitleOnCanvas(ctx, activeSeg.text, canvas.width, canvas.height, activeSeg.start, activeSeg.end, currentTime);
+        drawSubtitleOnCanvas(
+          ctx,
+          activeSeg.text,
+          canvas.width,
+          canvas.height,
+          activeSeg.start,
+          activeSeg.end,
+          currentTime
+        );
       }
 
+      // Progress
       const pct = 10 + Math.round((currentTime / totalDuration) * 85);
       onProgress(Math.min(pct, 95), "Renderizando vídeo com legendas...");
 
