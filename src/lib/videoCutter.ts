@@ -2,7 +2,6 @@ import type { SubtitleSegment } from "./subtitleUtils";
 import { getSharedFFmpeg } from "./ffmpegSingleton";
 import { fetchFile } from "@ffmpeg/util";
 
-export type VideoFormat = "original" | "9:16";
 export type ProgressCallback = (percent: number, status: string) => void;
 
 /**
@@ -23,12 +22,8 @@ async function convertToMp4(webmBlob: Blob, onProgress: ProgressCallback): Promi
     ["-i", "input.webm", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
     // Strategy 2: Pure remux (copy both streams)
     ["-i", "input.webm", "-c", "copy", "-movflags", "+faststart", "output.mp4"],
-    // Strategy 3: Full transcode with mpeg4
+    // Strategy 3: Full transcode with mpeg4 (widely available in WASM builds)
     ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"],
-    // Strategy 4: Same as 3 without movflags (some WASM builds don't support it)
-    ["-i", "input.webm", "-c:v", "mpeg4", "-q:v", "5", "-c:a", "aac", "-b:a", "128k", "output.mp4"],
-    // Strategy 5: Simplest possible - let FFmpeg decide codecs
-    ["-i", "input.webm", "output.mp4"],
   ];
 
   let success = false;
@@ -73,11 +68,10 @@ export async function cutVideoClip(
   clipIndex: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean,
-  format: VideoFormat = "original"
+  autoEdit?: boolean
 ): Promise<Blob> {
   onProgress(5, "Preparando vídeo...");
-  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit, format);
+  return recordVideoSegment(file, startSeconds, endSeconds, onProgress, subtitles, autoEdit);
 }
 
 export async function cutAllClips(
@@ -85,8 +79,7 @@ export async function cutAllClips(
   clips: { start_seconds: number; end_seconds: number; title: string }[],
   onProgress: (clipIndex: number, percent: number, status: string) => void,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean,
-  format: VideoFormat = "original"
+  autoEdit?: boolean
 ): Promise<{ blob: Blob; title: string }[]> {
   const results: { blob: Blob; title: string }[] = [];
 
@@ -99,8 +92,7 @@ export async function cutAllClips(
       i,
       (pct, status) => onProgress(i, pct, status),
       subtitles,
-      autoEdit,
-      format
+      autoEdit
     );
     results.push({ blob, title: clip.title });
   }
@@ -343,8 +335,7 @@ async function recordVideoSegment(
   endSeconds: number,
   onProgress: ProgressCallback,
   subtitles?: SubtitleSegment[],
-  autoEdit?: boolean,
-  format: VideoFormat = "original"
+  autoEdit?: boolean
 ): Promise<Blob> {
   const duration = endSeconds - startSeconds;
 
@@ -365,19 +356,10 @@ async function recordVideoSegment(
 
   onProgress(10, "Preparando gravação...");
 
-  // Set up canvas dimensions based on format
+  // Set up canvas with video dimensions
   const canvas = document.createElement("canvas");
-  const videoW = video.videoWidth || 1280;
-  const videoH = video.videoHeight || 720;
-
-  if (format === "9:16") {
-    // 9:16 vertical: 1080x1920, video centered with black bars
-    canvas.width = 1080;
-    canvas.height = 1920;
-  } else {
-    canvas.width = videoW;
-    canvas.height = videoH;
-  }
+  canvas.width = video.videoWidth || 1280;
+  canvas.height = video.videoHeight || 720;
   const ctx = canvas.getContext("2d")!;
 
   // Create media stream from canvas
@@ -446,31 +428,15 @@ async function recordVideoSegment(
   return new Promise<Blob>((resolve, reject) => {
     recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
-      if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
-      }
       const webmBlob = new Blob(chunks, { type: mimeType });
-      
-      // Always convert to MP4 - never return WebM
       try {
         const mp4Blob = await convertToMp4(webmBlob, onProgress);
         onProgress(100, "Pronto!");
         resolve(mp4Blob);
       } catch (e) {
-        console.error("MP4 conversion failed:", e);
-        // Try one more time with a fresh FFmpeg load
-        try {
-          console.log("[FFmpeg] Retrying conversion...");
-          const mp4Blob = await convertToMp4(webmBlob, onProgress);
-          onProgress(100, "Pronto!");
-          resolve(mp4Blob);
-        } catch (e2) {
-          console.error("MP4 conversion retry also failed:", e2);
-          // Last resort: rename as mp4 (some players handle it)
-          const mp4Blob = new Blob([webmBlob], { type: "video/mp4" });
-          onProgress(100, "Pronto!");
-          resolve(mp4Blob);
-        }
+        console.warn("MP4 conversion failed, returning WebM:", e);
+        onProgress(100, "Pronto!");
+        resolve(webmBlob);
       }
     };
 
@@ -492,28 +458,8 @@ async function recordVideoSegment(
       const elapsed = video.currentTime - startSeconds;
       const progress = Math.max(0, Math.min(1, elapsed / duration));
 
-      // Clear canvas (important for 9:16 black bars)
-      ctx.fillStyle = "#000000";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      if (format === "9:16") {
-        // Draw video centered in 1080x1920 canvas, maintaining aspect ratio
-        const scale = canvas.width / videoW;
-        const drawW = canvas.width;
-        const drawH = videoH * scale;
-        const drawY = (canvas.height - drawH) / 2;
-
-        // Apply Ken Burns within the video area
-        const zoom = 1 + progress * 0.08;
-        const zoomedW = drawW * zoom;
-        const zoomedH = drawH * zoom;
-        const dx = (drawW - zoomedW) / 2;
-        const dy = drawY + (drawH - zoomedH) / 2;
-        ctx.drawImage(video, dx, dy, zoomedW, zoomedH);
-      } else {
-        // 1. Draw video with Ken Burns zoom
-        applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
-      }
+      // 1. Draw video with Ken Burns zoom
+      applyKenBurns(ctx, video, canvas.width, canvas.height, progress);
 
       // 2. Apply color grade (Alto Edit or standard)
       if (autoEdit) {

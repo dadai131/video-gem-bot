@@ -1,5 +1,4 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
-import { toBlobURL } from "@ffmpeg/util";
 
 let ffmpegInstance: FFmpeg | null = null;
 let ffmpegLoaded = false;
@@ -10,6 +9,7 @@ export type ProgressCallback = (percent: number, status: string) => void;
 export async function getSharedFFmpeg(onProgress?: ProgressCallback): Promise<FFmpeg> {
   if (ffmpegInstance && ffmpegLoaded) return ffmpegInstance;
 
+  // Prevent multiple simultaneous loads
   if (loadingPromise) return loadingPromise;
 
   loadingPromise = (async () => {
@@ -22,30 +22,40 @@ export async function getSharedFFmpeg(onProgress?: ProgressCallback): Promise<FF
     onProgress?.(2, "Preparando motor de vídeo...");
 
     try {
+      // Use jsdelivr CDN which has proper CORS headers
+      // Match core version to the @ffmpeg/ffmpeg package version 0.12.10
       const CORE_VERSION = "0.12.6";
-      const CDN = `https://unpkg.com/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
+      const CDN = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
 
-      onProgress?.(5, "Baixando motor de vídeo (~30MB, só na 1ª vez)...");
+      onProgress?.(4, "Baixando motor de vídeo (~30MB, só na 1ª vez)...");
 
-      // Use toBlobURL which handles fetch + blob creation properly
-      const coreURL = await toBlobURL(`${CDN}/ffmpeg-core.js`, "text/javascript");
+      // Fetch core JS as blob URL
+      const coreResponse = await fetch(`${CDN}/ffmpeg-core.js`);
+      if (!coreResponse.ok) throw new Error(`Failed to fetch ffmpeg-core.js: ${coreResponse.status}`);
+      const coreBlob = new Blob([await coreResponse.text()], { type: "text/javascript" });
+      const coreURL = URL.createObjectURL(coreBlob);
 
-      onProgress?.(7, "Baixando WASM...");
+      onProgress?.(6, "Baixando WASM (~30MB)...");
 
-      const wasmURL = await toBlobURL(`${CDN}/ffmpeg-core.wasm`, "application/wasm");
+      // Fetch WASM as blob URL
+      const wasmResponse = await fetch(`${CDN}/ffmpeg-core.wasm`);
+      if (!wasmResponse.ok) throw new Error(`Failed to fetch ffmpeg-core.wasm: ${wasmResponse.status}`);
+      const wasmBlob = new Blob([await wasmResponse.arrayBuffer()], { type: "application/wasm" });
+      const wasmURL = URL.createObjectURL(wasmBlob);
 
-      onProgress?.(9, "Inicializando motor de vídeo...");
+      onProgress?.(8, "Inicializando motor de vídeo...");
 
-      // Load without workerURL to force single-threaded mode (no SharedArrayBuffer needed)
-      const loadPromise = ffmpeg.load({
-        coreURL,
-        wasmURL,
-      });
+      // Load with timeout
+      const loadPromise = ffmpeg.load({ coreURL, wasmURL });
       const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("FFmpeg load timeout (120s). Recarregue a página.")), 120000)
+        setTimeout(() => reject(new Error("FFmpeg load timeout (90s). Recarregue a página e tente novamente.")), 90000)
       );
 
       await Promise.race([loadPromise, timeoutPromise]);
+
+      // Cleanup blob URLs after successful load
+      URL.revokeObjectURL(coreURL);
+      URL.revokeObjectURL(wasmURL);
 
       ffmpegInstance = ffmpeg;
       ffmpegLoaded = true;

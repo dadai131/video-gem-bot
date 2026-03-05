@@ -11,7 +11,7 @@ import ExportDialog from "@/components/ExportDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
-import { cutVideoClip, cutAllClips, downloadBlob, type VideoFormat } from "@/lib/videoCutter";
+import { cutVideoClip, cutAllClips, downloadBlob } from "@/lib/videoCutter";
 import { trimVideo, extractAudioWav } from "@/lib/videoEditor";
 import type { SubtitleSegment } from "@/lib/subtitleUtils";
 import {
@@ -31,7 +31,6 @@ import {
   Search,
   Mic,
   Bell,
-  Smartphone,
 } from "lucide-react";
 
 function formatTime(s: number) {
@@ -84,9 +83,8 @@ const AppPage = () => {
   const [transcribeProgress, setTranscribeProgress] = useState(0);
   const [transcribeStatus, setTranscribeStatus] = useState("");
 
-  // Alto Edit mode & format
+  // Alto Edit mode
   const [autoEdit, setAutoEdit] = useState(false);
-  const [videoFormat, setVideoFormat] = useState<VideoFormat>("original");
   const whisperWorkerRef = useRef<Worker | null>(null);
 
   const playerRef = useRef<HTMLIFrameElement>(null);
@@ -259,8 +257,7 @@ const AppPage = () => {
           setCutStatus(status);
         },
         subtitles.length > 0 ? subtitles : undefined,
-        autoEdit,
-        videoFormat
+        autoEdit
       );
 
       const safeName = clip.title.replace(/[^a-zA-Z0-9À-ú\s-]/g, "").trim().replace(/\s+/g, "_");
@@ -295,8 +292,7 @@ const AppPage = () => {
           setCutStatus(`Cortando clip ${clipIdx + 1}/${clips.length}...`);
         },
         subtitles.length > 0 ? subtitles : undefined,
-        autoEdit,
-        videoFormat
+        autoEdit
       );
 
       for (const { blob, title } of results) {
@@ -839,15 +835,6 @@ const AppPage = () => {
                   </h2>
                   {mode === "upload" && uploadedFile && (
                     <div className="flex items-center gap-2">
-                      <Button
-                        variant={videoFormat === "9:16" ? "default" : "outline"}
-                        size="sm"
-                        className={`gap-2 ${videoFormat === "9:16" ? "bg-gradient-to-r from-pink-500 to-purple-500 hover:from-pink-600 hover:to-purple-600 text-white border-0 shadow-lg shadow-pink-500/25" : ""}`}
-                        onClick={() => setVideoFormat(videoFormat === "9:16" ? "original" : "9:16")}
-                      >
-                        <Smartphone className="w-4 h-4" />
-                        9:16
-                      </Button>
                       <Button
                         variant={autoEdit ? "default" : "outline"}
                         size="sm"
