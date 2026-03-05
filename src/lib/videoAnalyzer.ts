@@ -190,58 +190,161 @@ function combineScores(
   });
 }
 
+function detectHooks(scores: FrameScore[], duration: number): { time: number; hookScore: number }[] {
+  // Hooks = moments where there's a sudden spike after calm
+  // Look for big jumps in combined energy (audio + scene) compared to the previous few seconds
+  const hooks: { time: number; hookScore: number }[] = [];
+  const windowSize = 3; // seconds of calm before the spike
+
+  for (let i = windowSize; i < scores.length; i++) {
+    const current = scores[i].sceneChange + scores[i].audioEnergy;
+    let prevAvg = 0;
+    for (let j = i - windowSize; j < i; j++) {
+      prevAvg += scores[j].sceneChange + scores[j].audioEnergy;
+    }
+    prevAvg /= windowSize;
+
+    // A hook is a sudden contrast: calm -> intense
+    const contrast = current - prevAvg;
+    if (contrast > 0.3) {
+      hooks.push({ time: scores[i].time, hookScore: contrast });
+    }
+  }
+
+  return hooks;
+}
+
+function detectActionSequences(scores: FrameScore[]): { startIdx: number; endIdx: number; intensity: number }[] {
+  // Action = sustained high scene change + high audio over multiple seconds
+  const actionThreshold = 0.4;
+  const sequences: { startIdx: number; endIdx: number; intensity: number }[] = [];
+  let seqStart = -1;
+  let seqIntensity = 0;
+
+  for (let i = 0; i < scores.length; i++) {
+    const combined = scores[i].sceneChange * 0.5 + scores[i].audioEnergy * 0.5;
+    if (combined > actionThreshold) {
+      if (seqStart === -1) seqStart = i;
+      seqIntensity = Math.max(seqIntensity, combined);
+    } else {
+      if (seqStart !== -1 && i - seqStart >= 3) {
+        sequences.push({ startIdx: seqStart, endIdx: i - 1, intensity: seqIntensity });
+      }
+      seqStart = -1;
+      seqIntensity = 0;
+    }
+  }
+  if (seqStart !== -1 && scores.length - seqStart >= 3) {
+    sequences.push({ startIdx: seqStart, endIdx: scores.length - 1, intensity: seqIntensity });
+  }
+
+  return sequences;
+}
+
 function findBestClips(scores: FrameScore[], duration: number): Clip[] {
-  // Compute combined score per second
+  if (scores.length === 0) return createEvenClips(duration);
+
+  const clips: Clip[] = [];
+  const usedRanges: { start: number; end: number }[] = [];
+
+  const overlaps = (s: number, e: number) =>
+    usedRanges.some((r) => s < r.end && e > r.start);
+
+  // 1. Detect hooks (sudden attention-grabbing moments)
+  const hooks = detectHooks(scores, duration);
+  hooks.sort((a, b) => b.hookScore - a.hookScore);
+
+  for (const hook of hooks.slice(0, 3)) {
+    // Start clip 2 seconds before hook for context
+    const start = Math.max(0, hook.time - 2);
+    const end = Math.min(duration, start + 30);
+    if (overlaps(start, end)) continue;
+
+    usedRanges.push({ start, end });
+    clips.push({
+      title: `🎣 Gancho — Momento chamativo`,
+      start_seconds: Math.round(start),
+      end_seconds: Math.round(end),
+      score: Math.min(Math.round(hook.hookScore * 100 + 20), 100),
+      reason: "Contraste forte: silêncio/calma seguido de explosão visual ou sonora. Ótimo gancho para prender atenção.",
+    });
+  }
+
+  // 2. Detect action sequences (sustained intensity)
+  const actions = detectActionSequences(scores);
+  actions.sort((a, b) => b.intensity - a.intensity);
+
+  for (const action of actions.slice(0, 3)) {
+    const start = Math.max(0, scores[action.startIdx].time - 2);
+    const rawEnd = scores[action.endIdx].time + 2;
+    const clipLen = Math.min(90, Math.max(15, rawEnd - start));
+    const end = Math.min(duration, start + clipLen);
+    if (overlaps(start, end)) continue;
+
+    usedRanges.push({ start, end });
+    clips.push({
+      title: `⚡ Cena de ação — Alta intensidade`,
+      start_seconds: Math.round(start),
+      end_seconds: Math.round(end),
+      score: Math.min(Math.round(action.intensity * 100), 100),
+      reason: "Sequência sustentada de mudanças visuais rápidas + áudio intenso. Cena dinâmica e envolvente.",
+    });
+  }
+
+  // 3. Fill remaining with peak-based clips (original logic as fallback)
   const combined = scores.map((s) => ({
     time: s.time,
     score: s.sceneChange * 0.4 + s.audioEnergy * 0.6,
   }));
-
-  // Find peaks (local maxima above threshold)
   const mean = combined.reduce((a, b) => a + b.score, 0) / combined.length;
-  const threshold = mean * 1.5;
-
+  const threshold = mean * 1.3;
   const peaks = combined.filter((c) => c.score > threshold);
 
-  if (peaks.length === 0) {
-    // Fallback: just take evenly spaced clips
-    return createEvenClips(duration);
-  }
-
-  // Group nearby peaks into clusters (within 20 seconds)
+  // Cluster peaks
   const clusters: { times: number[]; maxScore: number }[] = [];
   for (const peak of peaks) {
-    const lastCluster = clusters[clusters.length - 1];
-    if (lastCluster && peak.time - lastCluster.times[lastCluster.times.length - 1] < 20) {
-      lastCluster.times.push(peak.time);
-      lastCluster.maxScore = Math.max(lastCluster.maxScore, peak.score);
+    const last = clusters[clusters.length - 1];
+    if (last && peak.time - last.times[last.times.length - 1] < 15) {
+      last.times.push(peak.time);
+      last.maxScore = Math.max(last.maxScore, peak.score);
     } else {
       clusters.push({ times: [peak.time], maxScore: peak.score });
     }
   }
-
-  // Sort by score, take top 6
   clusters.sort((a, b) => b.maxScore - a.maxScore);
-  const topClusters = clusters.slice(0, 6);
 
-  // Sort by time for consistent ordering
-  topClusters.sort((a, b) => a.times[0] - b.times[0]);
+  for (const cluster of clusters) {
+    if (clips.length >= 6) break;
+    const center = cluster.times[Math.floor(cluster.times.length / 2)];
+    const clipLen = Math.min(60, Math.max(15, cluster.times.length * 3));
+    const start = Math.max(0, center - clipLen / 2);
+    const end = Math.min(duration, start + clipLen);
+    if (overlaps(start, end)) continue;
 
-  return topClusters.map((cluster, i) => {
-    const centerTime = cluster.times[Math.floor(cluster.times.length / 2)];
-    const clipDuration = Math.min(90, Math.max(15, cluster.times.length * 3));
-    const start = Math.max(0, centerTime - clipDuration / 2);
-    const end = Math.min(duration, start + clipDuration);
-    const scorePercent = Math.round(cluster.maxScore * 100);
-
-    return {
-      title: `Momento ${i + 1} — Alta intensidade`,
+    usedRanges.push({ start, end });
+    const s = scores.find((sc) => sc.time === center);
+    clips.push({
+      title: getClipTitle(s),
       start_seconds: Math.round(start),
       end_seconds: Math.round(end),
-      score: Math.min(scorePercent, 100),
+      score: Math.min(Math.round(cluster.maxScore * 100), 100),
       reason: getClipReason(cluster, scores),
-    };
-  });
+    });
+  }
+
+  if (clips.length === 0) return createEvenClips(duration);
+
+  // Sort by score
+  clips.sort((a, b) => b.score - a.score);
+  return clips.slice(0, 6);
+}
+
+function getClipTitle(s: FrameScore | undefined): string {
+  if (!s) return "🔥 Momento intenso";
+  if (s.sceneChange > 0.6 && s.audioEnergy > 0.6) return "💥 Explosão de energia";
+  if (s.sceneChange > 0.6) return "🎬 Corte visual impactante";
+  if (s.audioEnergy > 0.6) return "🔊 Pico sonoro";
+  return "🔥 Momento de destaque";
 }
 
 function getClipReason(
