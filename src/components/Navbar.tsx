@@ -19,9 +19,6 @@ const Navbar = () => {
             <Bell className="w-5 h-5 text-muted-foreground" />
             <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
           </button>
-          <Button variant="ghost" size="sm" asChild>
-            <Link to="/login">Login</Link>
-          </Button>
           <Button size="sm" asChild>
             <Link to="/app">Começar grátis</Link>
           </Button>

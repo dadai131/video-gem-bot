@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 
 const plans = [
   {
@@ -65,11 +66,10 @@ const Pricing = () => {
           {plans.map((plan, i) => (
             <div
               key={i}
-              className={`rounded-2xl p-8 flex flex-col transition-all duration-300 ${
-                plan.highlight
-                  ? "glass glow-primary border-primary/40 scale-[1.02]"
-                  : "glass hover:border-primary/20"
-              }`}
+              className={`rounded-2xl p-8 flex flex-col transition-all duration-300 ${plan.highlight
+                ? "glass glow-primary border-primary/40 scale-[1.02]"
+                : "glass hover:border-primary/20"
+                }`}
             >
               {plan.highlight && (
                 <div className="text-xs font-bold text-primary tracking-widest uppercase mb-4">
@@ -94,8 +94,9 @@ const Pricing = () => {
                 variant={plan.highlight ? "default" : "outline"}
                 className="w-full"
                 size="lg"
+                asChild
               >
-                {plan.cta}
+                <Link to="/app">{plan.cta}</Link>
               </Button>
             </div>
           ))}
