@@ -139,32 +139,42 @@ function drawSubtitle(
   segEnd: number,
   currentTime: number
 ) {
-  const fontSize = Math.round(canvasHeight / 14);
-  ctx.font = `900 ${fontSize}px "Arial Black", Arial, sans-serif`;
+  // TikTok/Reels inspired style: Bold, Italic, Vibrant colors
+  const fontSize = Math.round(canvasHeight / 12); // Slightly larger for better readability
+  ctx.font = `italic 900 ${fontSize}px "Arial Black", Arial, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "bottom";
 
   const upperText = text.toUpperCase();
   const words = upperText.split(/\s+/);
   const x = canvasWidth / 2;
-  const y = canvasHeight - canvasHeight / 8;
+  const y = canvasHeight - canvasHeight / 6; // Moved up slightly from the bottom
 
   const segDuration = segEnd - segStart;
   const segProgress = Math.max(0, Math.min(1, (currentTime - segStart) / segDuration));
   const activeWordIndex = Math.floor(segProgress * words.length);
 
-  ctx.shadowColor = "rgba(0,0,0,0.8)";
-  ctx.shadowBlur = 8;
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 2;
+  // Outline/Stroke styling (Black)
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = fontSize / 6;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
 
-  if (words.length <= 1) {
-    ctx.strokeStyle = "black";
-    ctx.lineWidth = fontSize / 5;
-    ctx.lineJoin = "round";
+  // Shadow for extra pop
+  ctx.shadowColor = "rgba(0,0,0,0.5)";
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetX = 4;
+  ctx.shadowOffsetY = 4;
+
+  if (words.length === 0) return;
+
+  // Single word case
+  if (words.length === 1) {
     ctx.strokeText(upperText, x, y);
-    ctx.fillStyle = "#FFD400";
+    ctx.fillStyle = "#FFDD00"; // Vibrant Yellow
     ctx.fillText(upperText, x, y);
+    
+    // Reset shadow
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
@@ -172,27 +182,29 @@ function drawSubtitle(
     return;
   }
 
-  const fullWidth = ctx.measureText(words.join(" ")).width;
-  let startX = x - fullWidth / 2;
+  // Multi-word case with highlighted current word
+  const wordMetrics = words.map(w => ctx.measureText(w).width);
+  const spaceWidth = ctx.measureText(" ").width;
+  const totalWidth = wordMetrics.reduce((a, b) => a + b, 0) + spaceWidth * (words.length - 1);
+  
+  let currentX = x - totalWidth / 2;
 
   for (let i = 0; i < words.length; i++) {
     const word = words[i];
-    const wordWidth = ctx.measureText(word).width;
-    const spaceWidth = ctx.measureText(" ").width;
-    const wordX = startX + wordWidth / 2;
+    const wordWidth = wordMetrics[i];
+    const wordCenterX = currentX + wordWidth / 2;
 
-    ctx.strokeStyle = "black";
-    ctx.lineWidth = fontSize / 5;
-    ctx.lineJoin = "round";
-    ctx.textAlign = "center";
-    ctx.strokeText(word, wordX, y);
+    // Draw stroke
+    ctx.strokeText(word, wordCenterX, y);
 
-    ctx.fillStyle = i <= activeWordIndex ? "#FFD400" : "rgba(255, 255, 255, 0.85)";
-    ctx.fillText(word, wordX, y);
+    // Draw fill: Only the ACTIVE word is yellow, others are white
+    ctx.fillStyle = i === activeWordIndex ? "#FFDD00" : "#FFFFFF";
+    ctx.fillText(word, wordCenterX, y);
 
-    startX += wordWidth + spaceWidth;
+    currentX += wordWidth + spaceWidth;
   }
 
+  // Reset shadow for subsequent draws
   ctx.shadowColor = "transparent";
   ctx.shadowBlur = 0;
   ctx.shadowOffsetX = 0;
