@@ -1,4 +1,6 @@
 import type { SubtitleSegment } from "./subtitleUtils";
+import { getSharedFFmpeg } from "./ffmpegSingleton";
+import { fetchFile } from "@ffmpeg/util";
 
 export type VideoFormat = "original" | "9:16";
 export type ProgressCallback = (percent: number, status: string) => void;
@@ -173,7 +175,7 @@ function drawSubtitle(
     ctx.strokeText(upperText, x, y);
     ctx.fillStyle = "#FFDD00"; // Vibrant Yellow
     ctx.fillText(upperText, x, y);
-    
+
     // Reset shadow
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
@@ -186,7 +188,7 @@ function drawSubtitle(
   const wordMetrics = words.map(w => ctx.measureText(w).width);
   const spaceWidth = ctx.measureText(" ").width;
   const totalWidth = wordMetrics.reduce((a, b) => a + b, 0) + spaceWidth * (words.length - 1);
-  
+
   let currentX = x - totalWidth / 2;
 
   for (let i = 0; i < words.length; i++) {
@@ -348,13 +350,39 @@ async function recordVideoSegment(
     recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
       if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
+        try { await audioCtx.close(); } catch { }
       }
-      
-      // Build final blob with the recorded MIME type
-      const finalBlob = new Blob(chunks, { type: mimeType });
-      onProgress(100, "Pronto!");
-      resolve(finalBlob);
+
+      const recordedBlob = new Blob(chunks, { type: mimeType });
+
+      // If already MP4, just resolve
+      if (mimeType.includes("video/mp4")) {
+        onProgress(100, "Pronto!");
+        resolve(recordedBlob);
+        return;
+      }
+
+      // Convert WebM to MP4 using FFmpeg
+      try {
+        onProgress(96, "Convertendo para MP4...");
+        const ffmpeg = await getSharedFFmpeg();
+        const inputData = await fetchFile(recordedBlob);
+        await ffmpeg.writeFile("input.webm", inputData);
+
+        // Simple conversion to MP4
+        await ffmpeg.exec(["-i", "input.webm", "-c", "copy", "output.mp4"]);
+
+        const outputData = await ffmpeg.readFile("output.mp4");
+        const finalBlob = new Blob([new Uint8Array(outputData as Uint8Array)], { type: "video/mp4" });
+
+        onProgress(100, "Pronto!");
+        resolve(finalBlob);
+      } catch (err) {
+        console.error("Erro na conversão MP4:", err);
+        // Fallback to original blob if conversion fails
+        onProgress(100, "Pronto (formato original)!");
+        resolve(recordedBlob);
+      }
     };
 
     recorder.onerror = () => {
@@ -433,9 +461,8 @@ async function recordVideoSegment(
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
-  // Determine extension from the actual blob type
-  const ext = blob.type.startsWith("video/mp4") ? ".mp4" : ".webm";
-  const name = filename.replace(/\.[^.]+$/, "") + ext;
+  // Force .mp4 extension
+  const name = filename.replace(/\.[^.]+$/, "") + ".mp4";
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

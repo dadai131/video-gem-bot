@@ -1,6 +1,8 @@
 export type EditorProgressCallback = (percent: number, status: string) => void;
 
 import type { ProgressCallback } from "./videoCutter";
+import { getSharedFFmpeg } from "./ffmpegSingleton";
+import { fetchFile } from "@ffmpeg/util";
 
 /**
  * Pick best MIME for MediaRecorder. Prefer MP4, fallback WebM.
@@ -138,11 +140,39 @@ async function recordSegment(
     recorder.onstop = async () => {
       URL.revokeObjectURL(videoUrl);
       if (audioCtx) {
-        try { await audioCtx.close(); } catch {}
+        try { await audioCtx.close(); } catch { }
       }
-      const blob = new Blob(chunks, { type: mimeType });
-      onProgress(100, "Pronto!");
-      resolve(blob);
+
+      const recordedBlob = new Blob(chunks, { type: mimeType });
+
+      // If already MP4, just resolve
+      if (mimeType.includes("video/mp4")) {
+        onProgress(100, "Pronto!");
+        resolve(recordedBlob);
+        return;
+      }
+
+      // Convert WebM to MP4 using FFmpeg
+      try {
+        onProgress(96, "Convertendo para MP4...");
+        const ffmpeg = await getSharedFFmpeg();
+        const inputData = await fetchFile(recordedBlob);
+        await ffmpeg.writeFile("input.webm", inputData);
+
+        // Simple conversion to MP4
+        await ffmpeg.exec(["-i", "input.webm", "-c", "copy", "output.mp4"]);
+
+        const outputData = await ffmpeg.readFile("output.mp4");
+        const finalBlob = new Blob([new Uint8Array(outputData as Uint8Array)], { type: "video/mp4" });
+
+        onProgress(100, "Pronto!");
+        resolve(finalBlob);
+      } catch (err) {
+        console.error("Erro na conversão MP4:", err);
+        // Fallback to original blob if conversion fails
+        onProgress(100, "Pronto (formato original)!");
+        resolve(recordedBlob);
+      }
     };
 
     recorder.onerror = () => {
