@@ -8,6 +8,7 @@ import Navbar from "@/components/Navbar";
 import VideoTimeline from "@/components/VideoTimeline";
 import SubtitleEditor from "@/components/SubtitleEditor";
 import ExportDialog from "@/components/ExportDialog";
+import YouTubeUploadDialog from "@/components/YouTubeUploadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
@@ -763,13 +764,20 @@ const AppPage = () => {
               </>
             )}
             {hasVideo && (
-              <ExportDialog
-                file={uploadedFile}
-                subtitles={subtitles}
-                trimStart={trimStart}
-                trimEnd={trimEnd}
-                duration={videoDuration}
-              />
+              <>
+                <YouTubeUploadDialog
+                  file={uploadedFile}
+                  clips={clips}
+                  localVideoUrl={localVideoUrl}
+                />
+                <ExportDialog
+                  file={uploadedFile}
+                  subtitles={subtitles}
+                  trimStart={trimStart}
+                  trimEnd={trimEnd}
+                  duration={videoDuration}
+                />
+              </>
             )}
             <Button variant="outline" size="sm" className="gap-2" onClick={resetAll}>
               <RefreshCw className="w-4 h-4" />
