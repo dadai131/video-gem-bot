@@ -8,6 +8,7 @@ import Navbar from "@/components/Navbar";
 import VideoTimeline from "@/components/VideoTimeline";
 import SubtitleEditor from "@/components/SubtitleEditor";
 import ExportDialog from "@/components/ExportDialog";
+import YouTubeUploadDialog from "@/components/YouTubeUploadDialog";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "@/hooks/use-toast";
 import { analyzeVideoLocally, type Clip } from "@/lib/videoAnalyzer";
