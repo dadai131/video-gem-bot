@@ -19,47 +19,64 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
+function extractCaptionTracks(html: string): any[] {
+  const patterns = [
+    /"captions":\s*(\{.*?"playerCaptionsTracklistRenderer".*?\})\s*,\s*"videoDetails"/s,
+    /"captionTracks":\s*(\[[\s\S]*?\])/s,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) continue;
+
+    try {
+      const parsed = JSON.parse(match[1]);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+
+      const tracks = parsed?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(tracks) && tracks.length > 0) return tracks;
+    } catch (error) {
+      console.log("Failed to parse caption payload", String(error));
+    }
+  }
+
+  return [];
+}
+
 async function fetchTranscript(videoId: string): Promise<string | null> {
   try {
-    // Fetch the YouTube video page to extract caption tracks
     const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
       headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
     });
     const html = await pageResp.text();
 
-    // Extract captions JSON from the page
-    const captionMatch = html.match(/"captions":\s*(\{.*?"playerCaptionsTracklistRenderer".*?\})\s*,\s*"videoDetails"/s);
-    if (!captionMatch) {
+    const tracks = extractCaptionTracks(html);
+    if (tracks.length === 0) {
       console.log("No captions found in page");
       return null;
     }
 
-    let captionsJson;
-    try {
-      captionsJson = JSON.parse(captionMatch[1]);
-    } catch {
-      console.log("Failed to parse captions JSON");
-      return null;
-    }
-
-    const tracks = captionsJson?.playerCaptionsTracklistRenderer?.captionTracks;
-    if (!tracks || tracks.length === 0) return null;
-
-    // Prefer Portuguese, then English, then first available
     const ptTrack = tracks.find((t: any) => t.languageCode?.startsWith("pt"));
     const enTrack = tracks.find((t: any) => t.languageCode?.startsWith("en"));
     const track = ptTrack || enTrack || tracks[0];
 
-    const captionResp = await fetch(track.baseUrl + "&fmt=json3");
-    const captionData = await captionResp.json();
+    const captionUrl = track.baseUrl.includes("fmt=") ? track.baseUrl : `${track.baseUrl}&fmt=json3`;
+    const captionResp = await fetch(captionUrl, {
+      headers: { "User-Agent": "Mozilla/5.0", "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8" },
+    });
 
+    if (!captionResp.ok) {
+      console.log("Caption request failed", captionResp.status);
+      return null;
+    }
+
+    const captionData = await captionResp.json();
     if (!captionData.events) return null;
 
-    // Build transcript with timestamps
     const lines: string[] = [];
     for (const event of captionData.events) {
       if (!event.segs) continue;
-      const text = event.segs.map((s: any) => s.utf8).join("").trim();
+      const text = event.segs.map((s: any) => s.utf8).join("").replace(/\s+/g, " ").trim();
       if (!text) continue;
       const startMs = event.tStartMs || 0;
       const mins = Math.floor(startMs / 60000);
@@ -67,7 +84,7 @@ async function fetchTranscript(videoId: string): Promise<string | null> {
       lines.push(`[${mins}:${secs.toString().padStart(2, "0")}] ${text}`);
     }
 
-    return lines.join("\n");
+    return lines.length > 0 ? lines.join("\n") : null;
   } catch (e) {
     console.error("Transcript fetch error:", e);
     return null;
