@@ -41,6 +41,20 @@ function formatTime(s: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+
+  return null;
+}
+
 const AppPage = () => {
   const [searchParams] = useSearchParams();
   const initialUrl = searchParams.get("url") || "";
@@ -135,6 +149,75 @@ const AppPage = () => {
     };
   }, [localVideoUrl]);
 
+  const downloadYoutubeAsFile = useCallback(
+    async (id: string) => {
+      const response = await supabase.functions.invoke("download-youtube", {
+        body: { videoId: id },
+      });
+
+      const data = response.data;
+      if (data?.error || response.error) {
+        if (data?.fallback) {
+          throw new Error("Esse vídeo não permitiu download automático no momento.");
+        }
+        throw new Error(data?.error || response.error?.message || "Erro ao baixar vídeo do YouTube");
+      }
+
+      const remoteVideoUrl = data.type === "progressive" ? data.url : data.videoUrl;
+      if (!remoteVideoUrl) throw new Error("URL de download não encontrada");
+
+      const videoRes = await fetch(remoteVideoUrl);
+      if (!videoRes.ok) throw new Error("Falha ao baixar o vídeo do YouTube");
+
+      const blob = await videoRes.blob();
+      const file = new File([blob], `youtube_${id}.mp4`, { type: "video/mp4" });
+      const objUrl = URL.createObjectURL(file);
+
+      setUploadedFile(file);
+      setLocalVideoUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return objUrl;
+      });
+      setMode("upload");
+
+      return file;
+    },
+    []
+  );
+
+  const fallbackToLocalYoutubeAnalysis = useCallback(
+    async (targetUrl: string) => {
+      const extractedId = extractYouTubeVideoId(targetUrl);
+      if (!extractedId) {
+        throw new Error("URL do YouTube inválida.");
+      }
+
+      setVideoId(extractedId);
+      setYoutubeTranscript(null);
+      setStatusText("Legenda indisponível. Baixando vídeo para análise local...");
+      setProgress(25);
+
+      const file = await downloadYoutubeAsFile(extractedId);
+
+      setStatusText("Analisando vídeo localmente...");
+      const resultClips = await analyzeVideoLocally(file, (pct, status) => {
+        setProgress(Math.max(30, pct));
+        setStatusText(status);
+      });
+
+      setClips(resultClips);
+      setActiveClip(0);
+      setMainTab("analyze");
+      setPhase("results");
+
+      toast({
+        title: "Análise local ativada",
+        description: "Esse vídeo não trouxe legenda do YouTube, então usei análise local automática.",
+      });
+    },
+    [downloadYoutubeAsFile]
+  );
+
   const handleGenerateYoutube = async (overrideUrl?: string) => {
     const targetUrl = overrideUrl || url;
     if (!targetUrl.trim()) return;
@@ -178,6 +261,16 @@ const AppPage = () => {
       const data = rawResponse ? JSON.parse(rawResponse) : null;
 
       if (!functionResponse.ok) {
+        const shouldFallbackToLocal =
+          functionResponse.status === 422 &&
+          typeof data?.error === "string" &&
+          data.error.toLowerCase().includes("transcrição");
+
+        if (shouldFallbackToLocal) {
+          await fallbackToLocalYoutubeAnalysis(targetUrl);
+          return;
+        }
+
         throw new Error(data?.error || "Erro ao analisar vídeo");
       }
 
@@ -188,8 +281,6 @@ const AppPage = () => {
       setClips(data.clips || []);
       setActiveClip(0);
 
-      // Store transcript for reference but don't parse into subtitles
-      // YouTube mode only shows scene suggestions
       if (data.transcript) {
         setYoutubeTranscript(data.transcript);
       }
@@ -220,7 +311,6 @@ const AppPage = () => {
       return;
     }
     setUploadedFile(file);
-    // Immediately create preview URL
     const objUrl = URL.createObjectURL(file);
     if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
     setLocalVideoUrl(objUrl);
@@ -342,44 +432,11 @@ const AppPage = () => {
     setShowYtdlpInstructions(false);
 
     try {
-      const response = await supabase.functions.invoke("download-youtube", {
-        body: { videoId },
-      });
-
-      const data = response.data;
-      if (data?.error || response.error) {
-        if (data?.fallback) {
-          setShowYtdlpInstructions(true);
-          toast({
-            title: "Download automático indisponível",
-            description: "Use o yt-dlp no seu PC para baixar o vídeo (instruções abaixo).",
-            variant: "destructive",
-          });
-          return;
-        }
-        throw new Error(data?.error || response.error?.message || "Erro desconhecido");
-      }
-
-      setDownloadStatus("Baixando vídeo...");
-
-      const videoUrl = data.type === "progressive" ? data.url : data.videoUrl;
-      if (!videoUrl) throw new Error("URL de download não encontrada");
-
-      const videoRes = await fetch(videoUrl);
-      if (!videoRes.ok) throw new Error("Falha ao baixar o vídeo do YouTube");
-
-      const blob = await videoRes.blob();
-      const file = new File([blob], `youtube_${videoId}.mp4`, { type: "video/mp4" });
-
-      setUploadedFile(file);
-      const objUrl = URL.createObjectURL(file);
-      if (localVideoUrl) URL.revokeObjectURL(localVideoUrl);
-      setLocalVideoUrl(objUrl);
-      setMode("upload");
+      const file = await downloadYoutubeAsFile(videoId);
 
       toast({
         title: "Vídeo baixado!",
-        description: "Agora você pode usar as abas Editar e Legendar com Whisper.",
+        description: file.name,
       });
     } catch (e: any) {
       console.error("Download YouTube error:", e);
