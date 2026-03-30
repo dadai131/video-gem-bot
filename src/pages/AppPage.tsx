@@ -151,20 +151,35 @@ const AppPage = () => {
       setProgress(20);
       setStatusText("Analisando transcrição com IA...");
 
-      const response = await supabase.functions.invoke("analyze-video", {
-        body: { url: targetUrl },
-      });
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session?.access_token) {
+        throw new Error("Faça login novamente para analisar o vídeo.");
+      }
+
+      const functionResponse = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-video`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${session.access_token}`,
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ url: targetUrl }),
+        }
+      );
 
       clearInterval(progressInterval);
 
-      const data = response.data;
-      const error = response.error;
+      const rawResponse = await functionResponse.text();
+      const data = rawResponse ? JSON.parse(rawResponse) : null;
 
-      if (error) {
-        const msg = data?.error || error.message || "Erro ao analisar vídeo";
-        throw new Error(msg);
+      if (!functionResponse.ok) {
+        throw new Error(data?.error || "Erro ao analisar vídeo");
       }
-      if (data?.error) throw new Error(data.error);
 
       setProgress(95);
       setStatusText("Preparando resultados...");
