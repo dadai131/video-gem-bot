@@ -127,6 +127,65 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Try Piped API instances
+    for (const instance of PIPED_INSTANCES) {
+      try {
+        const apiUrl = `${instance}/streams/${cleanId}`;
+        const res = await fetch(apiUrl, {
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!res.ok) {
+          await res.text();
+          continue;
+        }
+
+        const data = await res.json();
+
+        // Piped uses videoStreams and audioStreams
+        const videoStreams = (data.videoStreams || [])
+          .filter((f: any) => f.format === 'MPEG_4' && f.videoOnly === false && f.url)
+          .sort((a: any, b: any) => (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0));
+
+        if (videoStreams.length > 0) {
+          return new Response(JSON.stringify({
+            type: 'progressive',
+            url: videoStreams[0].url,
+            quality: videoStreams[0].quality || '360p',
+            mimeType: 'video/mp4',
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        // Try video-only + audio
+        const vidOnly = (data.videoStreams || [])
+          .filter((f: any) => f.format === 'MPEG_4' && f.url)
+          .sort((a: any, b: any) => (parseInt(b.quality) || 0) - (parseInt(a.quality) || 0));
+
+        const audStreams = (data.audioStreams || [])
+          .filter((f: any) => f.url)
+          .sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0));
+
+        if (vidOnly.length > 0) {
+          return new Response(JSON.stringify({
+            type: audStreams.length > 0 ? 'adaptive' : 'progressive',
+            url: vidOnly[0].url,
+            videoUrl: vidOnly[0].url,
+            audioUrl: audStreams[0]?.url,
+            quality: vidOnly[0].quality || '720p',
+            mimeType: 'video/mp4',
+          }), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      } catch (err) {
+        console.log(`Piped ${instance} failed:`, err.message);
+        continue;
+      }
+    }
+
     // All instances failed — try direct YouTube scrape as last resort
     const directResult = await tryDirectYoutube(cleanId);
     if (directResult) {
