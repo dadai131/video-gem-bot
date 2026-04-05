@@ -233,12 +233,14 @@ const AppPage = () => {
       setPhase("results");
     } catch (e: any) {
       console.error(e);
+      setShowYtdlpInstructions(true);
       toast({
-        title: "Erro",
-        description: e.message || "Não foi possível analisar o vídeo.",
+        title: "Download automático falhou",
+        description: "Use o yt-dlp para baixar o vídeo e depois faça upload aqui.",
         variant: "destructive",
       });
       setPhase("input");
+      setMode("upload");
     }
   };
 
