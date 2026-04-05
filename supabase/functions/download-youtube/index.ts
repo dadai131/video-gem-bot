@@ -7,10 +7,16 @@ const corsHeaders = {
 
 const INVIDIOUS_INSTANCES = [
   'https://inv.nadeko.net',
-  'https://invidious.nerdvpn.de',
-  'https://invidious.jing.rocks',
-  'https://vid.puffyan.us',
-  'https://invidious.privacyredirect.com',
+  'https://invidious.lunar.icu',
+  'https://inv.tux.pizza',
+  'https://invidious.protokolla.fi',
+  'https://iv.ggtyler.dev',
+];
+
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.adminforge.de',
+  'https://api-piped.mha.fi',
 ];
 
 Deno.serve(async (req) => {
