@@ -185,55 +185,28 @@ const AppPage = () => {
     []
   );
 
-  const fallbackToLocalYoutubeAnalysis = useCallback(
-    async (targetUrl: string) => {
-      const extractedId = extractYouTubeVideoId(targetUrl);
-      if (!extractedId) {
-        throw new Error("URL do YouTube inválida.");
-      }
-
-      setVideoId(extractedId);
-      setYoutubeTranscript(null);
-      setStatusText("Legenda indisponível. Baixando vídeo para análise local...");
-      setProgress(25);
-
-      const file = await downloadYoutubeAsFile(extractedId);
-
-      setStatusText("Analisando vídeo localmente...");
-      const resultClips = await analyzeVideoLocally(file, (pct, status) => {
-        setProgress(Math.max(30, pct));
-        setStatusText(status);
-      });
-
-      setClips(resultClips);
-      setActiveClip(0);
-      setMainTab("analyze");
-      setPhase("results");
-
-      toast({
-        title: "Análise local ativada",
-        description: "Esse vídeo não trouxe legenda do YouTube, então usei análise local automática.",
-      });
-    },
-    [downloadYoutubeAsFile]
-  );
 
   const handleGenerateYoutube = async (overrideUrl?: string) => {
     const targetUrl = overrideUrl || url;
     if (!targetUrl.trim()) return;
 
-    setPhase("processing");
-    setProgress(10);
-    setStatusText("Extraindo transcrição do vídeo...");
+    const extractedId = extractYouTubeVideoId(targetUrl);
+    if (!extractedId) {
+      toast({
+        title: "URL inválida",
+        description: "Cole um link válido do YouTube.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    const progressInterval = setInterval(() => {
-      setProgress((p) => Math.min(p + 2, 85));
-    }, 500);
+    setPhase("processing");
+    setProgress(5);
+    setStatusText("Baixando vídeo do YouTube...");
+    setVideoId(extractedId);
+    setYoutubeTranscript(null);
 
     try {
-      setProgress(20);
-      setStatusText("Analisando transcrição com IA...");
-
       const {
         data: { session },
       } = await supabase.auth.getSession();
@@ -242,54 +215,23 @@ const AppPage = () => {
         throw new Error("Faça login novamente para analisar o vídeo.");
       }
 
-      const functionResponse = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-video`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${session.access_token}`,
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ url: targetUrl }),
-        }
-      );
+      setProgress(10);
+      const file = await downloadYoutubeAsFile(extractedId);
 
-      clearInterval(progressInterval);
+      setProgress(25);
+      setStatusText("Analisando cenas e ganchos...");
 
-      const rawResponse = await functionResponse.text();
-      const data = rawResponse ? JSON.parse(rawResponse) : null;
+      const resultClips = await analyzeVideoLocally(file, (pct, status) => {
+        setProgress(25 + Math.round(pct * 0.7));
+        setStatusText(status);
+      });
 
-      if (!functionResponse.ok) {
-        const shouldFallbackToLocal =
-          functionResponse.status === 422 &&
-          typeof data?.error === "string" &&
-          data.error.toLowerCase().includes("transcrição");
-
-        if (shouldFallbackToLocal) {
-          await fallbackToLocalYoutubeAnalysis(targetUrl);
-          return;
-        }
-
-        throw new Error(data?.error || "Erro ao analisar vídeo");
-      }
-
-      setProgress(95);
-      setStatusText("Preparando resultados...");
-
-      setVideoId(data.videoId);
-      setClips(data.clips || []);
+      setClips(resultClips);
       setActiveClip(0);
-
-      if (data.transcript) {
-        setYoutubeTranscript(data.transcript);
-      }
-
-      await new Promise((r) => setTimeout(r, 500));
+      setMainTab("analyze");
       setProgress(100);
       setPhase("results");
     } catch (e: any) {
-      clearInterval(progressInterval);
       console.error(e);
       toast({
         title: "Erro",
