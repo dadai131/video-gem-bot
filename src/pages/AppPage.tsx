@@ -185,38 +185,6 @@ const AppPage = () => {
     []
   );
 
-  const fallbackToLocalYoutubeAnalysis = useCallback(
-    async (targetUrl: string) => {
-      const extractedId = extractYouTubeVideoId(targetUrl);
-      if (!extractedId) {
-        throw new Error("URL do YouTube inválida.");
-      }
-
-      setVideoId(extractedId);
-      setYoutubeTranscript(null);
-      setStatusText("Legenda indisponível. Baixando vídeo para análise local...");
-      setProgress(25);
-
-      const file = await downloadYoutubeAsFile(extractedId);
-
-      setStatusText("Analisando vídeo localmente...");
-      const resultClips = await analyzeVideoLocally(file, (pct, status) => {
-        setProgress(Math.max(30, pct));
-        setStatusText(status);
-      });
-
-      setClips(resultClips);
-      setActiveClip(0);
-      setMainTab("analyze");
-      setPhase("results");
-
-      toast({
-        title: "Análise local ativada",
-        description: "Esse vídeo não trouxe legenda do YouTube, então usei análise local automática.",
-      });
-    },
-    [downloadYoutubeAsFile]
-  );
 
   const handleGenerateYoutube = async (overrideUrl?: string) => {
     const targetUrl = overrideUrl || url;
